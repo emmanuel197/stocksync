@@ -1,0 +1,11 @@
+# Task ID: 2
+# Title: User Authentication and Role-Based Access Control
+# Status: pending
+# Dependencies: 1
+# Priority: high
+# Description: Implement the authentication system with role-based access control for Buyers, Suppliers, Drivers, and Admins.
+# Details:
+Extend Django's authentication system with JWT support. Implement custom user model with role fields. Create permission classes for role-based access control. Add multi-factor authentication support. Implement password policies and recovery mechanisms. Set up SSO integration capabilities. Create middleware for role-based route protection. Implement audit logging for user activities.
+
+# Test Strategy:
+Test user registration, login, and password reset flows. Verify role-based access restrictions. Test MFA functionality. Ensure proper JWT token handling and expiration. Validate audit logging captures all required events.

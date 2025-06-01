@@ -2,6 +2,7 @@ from django.db.models import Q
 from django.utils.deprecation import MiddlewareMixin
 from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
+from django.db import models
 
 
 class OrganizationMiddleware(MiddlewareMixin):
