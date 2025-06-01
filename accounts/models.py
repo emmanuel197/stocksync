@@ -1,3 +1,4 @@
+import uuid # Import uuid
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from accounts.managers import BaseTenantManager, TenantAwareQuerySet, get_current_organization # Import necessary classes
@@ -19,7 +20,9 @@ class Organization(models.Model):
             ('enterprise', 'Enterprise')
         ]
     )
-    active_status = models.BooleanField(default=True)
+    active_status = models.BooleanField(default=False) # Set default to False
+    activation_token = models.UUIDField(default=uuid.uuid4, editable=False, unique=True) # Add activation token field
+    email_sent = models.BooleanField(default=False) # Add field to track if email was sent
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -30,6 +33,7 @@ class Organization(models.Model):
             models.Index(fields=['name']),
             models.Index(fields=['subscription_plan']),
             models.Index(fields=['active_status']),
+            models.Index(fields=['activation_token']), # Add index for activation token
         ]
         
     def __str__(self):

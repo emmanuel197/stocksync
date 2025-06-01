@@ -1,9 +1,6 @@
 from rest_framework import serializers
-from .models import Product, Order, ProductImage, Size, ProductSize, Brand
-# class ProductSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Product
-#         fields = ('id' ,'name', 'price', 'image', 'description')
+from .models import Product, Order, ProductImage, Size, ProductSize, Brand, OrderItem, ShippingAddress, Buyer, Supplier, Driver, Category, Location, Inventory, InventoryMovement
+from accounts.models import Organization, User
 
 class ProductImageSerializer(serializers.ModelSerializer):
     class Meta:
@@ -21,6 +18,7 @@ class ProductSizeSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductSize
         fields = ('size',)
+
 class ProductSerializer(serializers.ModelSerializer):
     images = ProductImageSerializer(many=True, read_only=True)
     sizes = ProductSizeSerializer(many=True, read_only=True)
@@ -34,38 +32,25 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_brand(self, obj):
         return obj.brand.name if obj.brand else None  
     
-    def get_total_completed_orders(self, obj):  # Add this method
+    def get_total_completed_orders(self, obj):
         return obj.get_completed
-# class SizeSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Size
-#         fields = ('name',)
 
-# class ProductSizeSerializer(serializers.ModelSerializer):
-#     size = SizeSerializer()
+class OrganizationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Organization
+        fields = '__all__'
 
-#     class Meta:
-#         model = ProductSize
-#         fields = ('size',)
+class BuyerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Buyer
+        fields = '__all__'
 
-# class ProductSerializer(serializers.ModelSerializer):
-#     sizes = ProductSizeSerializer(many=True, read_only=True)
-#     # other fields...
+class SupplierSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Supplier
+        fields = '__all__'
 
-#     class Meta:
-#         model = Product
-#         fields = ('id', 'name', 'price', 'image', 'description', 'sizes', 'images')
-        
-
-# class ColorSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = Color
-#         fields = ('name',)
-
-# class OrderItemSerializer(serializers.ModelSerializer):
-#     size = SizeSerializer()
-#     color = ColorSerializer()
-
-#     class Meta:
-#         model = OrderItem
-#         fields = ('order', 'product', 'size', 'color', 'quantity', 'date_added', 'get_total')
+class DriverSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Driver
+        fields = '__all__'

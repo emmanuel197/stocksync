@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import *
-
+app_name = 'api'
 urlpatterns = [
     path('products', ProductAPIView.as_view()),
     path('create-order/', CreateOrUpdateOrderView.as_view()),
@@ -10,5 +10,9 @@ urlpatterns = [
     path('unauth-process-order/', UnAuthProcessOrderView.as_view()),
     path('search/', ProductSearchView.as_view()),
     path('products/filter/', FilteredProductListView.as_view()),
-
+    path('organizations/', OrganizationCreateView.as_view(), name='organization-create'),
+    path('organizations/activate/<uuid:token>/', OrganizationActivationView.as_view(), name='activate-organization'),
+    path('buyers/', BuyerCreateView.as_view(), name='buyer-create'),
+    path('suppliers/', SupplierCreateView.as_view(), name='supplier-create'),
+    path('drivers/', DriverCreateView.as_view(), name='driver-create'),
 ]

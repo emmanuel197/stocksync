@@ -9,7 +9,7 @@ urlpatterns = [
     path('auth/', include('djoser.urls.jwt')),
     path('auth/', include('djoser.social.urls')),
     # path('google/auth/', include('djoser.social.urls')),
-    path("api/", include("api.urls")),
+    path("api/", include("api.urls", namespace="api")),
     path("", include("store.urls")),
 ]
 
