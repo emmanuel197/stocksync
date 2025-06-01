@@ -53,6 +53,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'accounts.request_middleware.RequestMiddleware',  # Add request middleware
+    'accounts.middleware.OrganizationMiddleware',  # Add organization middleware
 ]
 
 ROOT_URLCONF = 'stocksync.urls'
@@ -197,6 +199,6 @@ SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.environ.get('SOCIAL_AUTH_GOOGLE_OAUTH2_SEC
 SOCIAL_AUTH_GOOGLE_OAUTH2_SCOPE = ['https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'openid']
 SOCIAL_AUTH_GOOGLE_OAUTH2_EXTRA_DATA = ['first_name', 'last_name']
 
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
