@@ -1,5 +1,5 @@
 from django.shortcuts import get_object_or_404
-from .serializers import ProductSerializer, OrganizationSerializer, BuyerSerializer, SupplierSerializer, DriverSerializer # Import new serializers
+from .serializers import ProductSerializer, OrganizationSerializer, BuyerSerializer, SupplierSerializer, DriverSerializer, OrganizationOnboardingSerializer # Import new serializers
 from .models import Product, Order, OrderItem, ShippingAddress, ProductImage, ProductSize, Buyer, Brand, Supplier, Driver, Category, Location, Inventory, InventoryMovement # Import new models
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -21,6 +21,7 @@ from django.utils.http import urlsafe_base64_encode # Import urlsafe_base64_enco
 from accounts.permissions import IsBuyer, IsAdminOrManager, IsStaff # Import custom permissions
 
 from accounts.models import Organization, User # Import Organization and User models
+from djoser.conf import settings as djoser_settings # Import Djoser settings
 
 # Create your views here.
 class ProductAPIView(generics.ListAPIView):
@@ -352,3 +353,33 @@ class DriverCreateView(generics.CreateAPIView):
     def perform_create(self, serializer):
         # Automatically associate the driver with the user's organization
         serializer.save(organization=self.request.user.organization)
+
+class OrganizationOnboardingView(generics.CreateAPIView):
+    """API endpoint for creating a new Organization and its initial admin user."""
+    serializer_class = OrganizationOnboardingSerializer
+    permission_classes = [AllowAny] # This endpoint should be publicly accessible for sign-up
+
+    def perform_create(self, serializer):
+        # The serializer's create method handles the creation of both organization and user
+        # We just need to call save() which in turn calls the create method of the serializer
+        created_objects = serializer.save()
+        organization = created_objects['organization']
+        user = created_objects['user']
+
+        # Trigger Djoser's user activation email
+        if djoser_settings.SEND_ACTIVATION_EMAIL:
+             try:
+                 djoser_settings.EMAIL.activation(self.request, {"user": user}).send([user.email])
+                 print(f"Djoser activation email triggered for user: {user.email}")
+             except Exception as e:
+                 print(f"Error triggering Djoser activation email for user {user.email}: {e}")
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        # Return a custom response indicating success and that an email was sent
+        return Response(
+            {"detail": "Organization and initial user created. Please check the user's email for activation."},
+            status=status.HTTP_201_CREATED
+        )

@@ -1,13 +1,13 @@
 Content-Type: multipart/alternative;
- boundary="===============5174124125269552958=="
+ boundary="===============8383580863582496210=="
 MIME-Version: 1.0
 Subject: Account activation on 127.0.0.1:8000
 From: webmaster@localhost
-To: juliehatchett0302@gmail.com
-Date: Sun, 01 Jun 2025 19:56:27 -0000
-Message-ID: <174880778711.25448.4655613479292863107@LAPTOP-2PJL7L4A>
+To: admin.user@example.com
+Date: Sun, 01 Jun 2025 21:27:05 -0000
+Message-ID: <174881322596.32032.11116946548616219449@LAPTOP-2PJL7L4A>
 
---===============5174124125269552958==
+--===============8383580863582496210==
 Content-Type: text/plain; charset="utf-8"
 MIME-Version: 1.0
 Content-Transfer-Encoding: 7bit
@@ -15,12 +15,12 @@ Content-Transfer-Encoding: 7bit
 You're receiving this email because you need to finish activation process on 127.0.0.1:8000.
 
 Please go to the following page to activate account:
-http://127.0.0.1:8000/activate/Ng/cqqi23-acb79055ed4bec38d268b9e8916b3de1
+http://127.0.0.1:8000/activate/OQ/cqqm95-cf6cf40e3c09b4a6a6ab31c32b2832a0
 
 Thanks for using our site!
 
 The 127.0.0.1:8000 team
---===============5174124125269552958==
+--===============8383580863582496210==
 Content-Type: text/html; charset="utf-8"
 MIME-Version: 1.0
 Content-Transfer-Encoding: 7bit
@@ -28,11 +28,11 @@ Content-Transfer-Encoding: 7bit
 <p>You're receiving this email because you need to finish activation process on 127.0.0.1:8000.</p>
 
 <p>Please go to the following page to activate account:</p>
-<p><a href="http://127.0.0.1:8000/activate/Ng/cqqi23-acb79055ed4bec38d268b9e8916b3de1">http://127.0.0.1:8000/activate/Ng/cqqi23-acb79055ed4bec38d268b9e8916b3de1</a></p>
+<p><a href="http://127.0.0.1:8000/activate/OQ/cqqm95-cf6cf40e3c09b4a6a6ab31c32b2832a0">http://127.0.0.1:8000/activate/OQ/cqqm95-cf6cf40e3c09b4a6a6ab31c32b2832a0</a></p>
 
 <p>Thanks for using our site!</p>
 
 <p>The 127.0.0.1:8000 team</p>
---===============5174124125269552958==--
+--===============8383580863582496210==--
 
 -------------------------------------------------------------------------------

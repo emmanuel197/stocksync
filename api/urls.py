@@ -10,7 +10,7 @@ urlpatterns = [
     path('unauth-process-order/', UnAuthProcessOrderView.as_view()),
     path('search/', ProductSearchView.as_view()),
     path('products/filter/', FilteredProductListView.as_view()),
-    path('organizations/', OrganizationCreateView.as_view(), name='organization-create'),
+    path('onboarding/', OrganizationOnboardingView.as_view(), name='organization-onboarding'),
     path('organizations/activate/<uuid:token>/', OrganizationActivationView.as_view(), name='activate-organization'),
     path('buyers/', BuyerCreateView.as_view(), name='buyer-create'),
     path('suppliers/', SupplierCreateView.as_view(), name='supplier-create'),
