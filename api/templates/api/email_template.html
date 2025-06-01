@@ -1,0 +1,35 @@
+Subject: Order Confirmation: {{order.transaction_id}}
+
+Dear {{first_name}},
+
+Thank you for your recent purchase with KuandorWear! We are excited to confirm that your order has been successfully processed {% if order.shipping %}and is now being prepared for shipment{% endif %}. Below, you will find the details of your purchase:
+
+Order ID: {{order.transaction_id}}
+Date of Purchase: {{order.date_completed}}
+{% if order.shipping %}
+Shipping Address: 
+{{ shipping_address.address }}, {{ shipping_address.city }}, {{ shipping_address.state }}, {{ shipping_address.zipcode }}, {{ shipping_address.country }}
+{% endif %}
+
+Product(s) Ordered:
+{%  for item in orderitems %}
+{{item.product.name}}: {{item.quantity}}, ${{item.product.price}}
+{% endfor %}
+
+Total Amount: ${{total}}
+
+{% comment %} Payment Method: [Payment Method] {% endcomment %}
+
+{% if order.shipping %}
+Please note that you will receive a separate email with tracking information once your order has been shipped.
+{% endif %}
+If you have any questions or concerns regarding your order, feel free to reply to this email or contact our customer service team at eamokuandoh@gmail.com.
+
+We sincerely appreciate your business and hope that you enjoy your purchase. Thank you for choosing KuandorWear!
+
+Warm regards,
+
+Emmanuel Amokuandoh
+Managing Director
+KuandorWear
++233 683 6242
