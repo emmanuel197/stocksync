@@ -264,38 +264,29 @@ def send_organization_activation_email(organization):
     """Sends an activation email to the organization's contact email."""
     subject = 'Activate Your StockSync Organization'
     # Construct the activation link
-    # Assuming your frontend will handle the activation URL structure
-    # For now, we'll use a simple backend URL
     activation_link = settings.FRONTEND_URL + reverse('api:activate-organization', kwargs={'token': organization.activation_token})
 
-    html_message = render_to_string('api/organization_activation_email.html', {
+    template = render_to_string('api/organization_activation_email.html', {
         'organization_name': organization.name,
         'activation_link': activation_link,
     })
-    plain_message = f"""
-    Hello {organization.name},
 
-    Thank you for signing up for StockSync!
-
-    Please click the link below to activate your organization:
-    {activation_link}
-
-    If you did not sign up for StockSync, please ignore this email.
-
-    Sincerely,
-    The StockSync Team
-    """
-
-    send_mail(
+    email = EmailMessage(
         subject,
-        plain_message,
-        settings.DEFAULT_FROM_EMAIL, # Make sure DEFAULT_FROM_EMAIL is set in settings.py
+        template, # Use the rendered template directly as the body
+        settings.EMAIL_HOST_USER, # Use EMAIL_HOST_USER as the sender to match the format
         [organization.contact_email],
-        html_message=html_message,
-        fail_silently=False,
     )
-    organization.email_sent = True
-    organization.save(update_fields=['email_sent'])
+    email.fail_silently = False
+
+    try:
+        email.send()
+        organization.email_sent = True
+        organization.save(update_fields=['email_sent'])
+        print(f"Activation email sent successfully to {organization.contact_email}") # Debug print
+    except Exception as e:
+        print(f"Error sending activation email to {organization.contact_email}: {e}")
+        # Optionally handle the error, e.g., log it or mark the organization for manual activation
 
 class OrganizationCreateView(generics.CreateAPIView):
     """API endpoint for creating a new Organization."""

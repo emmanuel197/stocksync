@@ -1,0 +1,38 @@
+Content-Type: multipart/alternative;
+ boundary="===============5174124125269552958=="
+MIME-Version: 1.0
+Subject: Account activation on 127.0.0.1:8000
+From: webmaster@localhost
+To: juliehatchett0302@gmail.com
+Date: Sun, 01 Jun 2025 19:56:27 -0000
+Message-ID: <174880778711.25448.4655613479292863107@LAPTOP-2PJL7L4A>
+
+--===============5174124125269552958==
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+
+You're receiving this email because you need to finish activation process on 127.0.0.1:8000.
+
+Please go to the following page to activate account:
+http://127.0.0.1:8000/activate/Ng/cqqi23-acb79055ed4bec38d268b9e8916b3de1
+
+Thanks for using our site!
+
+The 127.0.0.1:8000 team
+--===============5174124125269552958==
+Content-Type: text/html; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+
+<p>You're receiving this email because you need to finish activation process on 127.0.0.1:8000.</p>
+
+<p>Please go to the following page to activate account:</p>
+<p><a href="http://127.0.0.1:8000/activate/Ng/cqqi23-acb79055ed4bec38d268b9e8916b3de1">http://127.0.0.1:8000/activate/Ng/cqqi23-acb79055ed4bec38d268b9e8916b3de1</a></p>
+
+<p>Thanks for using our site!</p>
+
+<p>The 127.0.0.1:8000 team</p>
+--===============5174124125269552958==--
+
+-------------------------------------------------------------------------------
