@@ -6,19 +6,178 @@ import random, string
 # Create your models here.
 
 
-class Customer(models.Model):
-    customer_id = models.CharField(max_length=200, null=True, blank=True)
-    user = models.OneToOneField(User, null=True, blank=True, on_delete=models.CASCADE)
-    first_name = models.CharField(max_length=200, null=True, blank=True)
-    last_name = models.CharField(max_length=200, null=True, blank=True)
-    email = models.EmailField(max_length=200, null=True, blank=True)
-
-
 class Brand(models.Model):
     name = models.CharField(max_length=200)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='brands')  # Add organization ForeignKey
 
     def __str__(self):
         return self.name
+
+
+class Supplier(models.Model):
+    PAYMENT_TERMS_CHOICES = [
+        ('immediate', 'Immediate'),
+        ('net_15', 'Net 15 Days'),
+        ('net_30', 'Net 30 Days'),
+        ('net_45', 'Net 45 Days'),
+        ('net_60', 'Net 60 Days'),
+        ('custom', 'Custom'),
+    ]
+    
+    name = models.CharField(max_length=200)
+    supplier_code = models.CharField(max_length=50, unique=True)
+    contact_person = models.CharField(max_length=100, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    phone = models.CharField(max_length=20, blank=True, null=True)
+    address = models.TextField(blank=True, null=True)
+    payment_terms = models.CharField(max_length=20, choices=PAYMENT_TERMS_CHOICES, default='net_30')
+    active_status = models.BooleanField(default=True)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='suppliers')
+    notes = models.TextField(blank=True, null=True)
+    website = models.URLField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['name']),
+            models.Index(fields=['supplier_code']),
+            models.Index(fields=['organization']),
+            models.Index(fields=['active_status']),
+        ]
+        unique_together = ['name', 'organization']
+    
+    def __str__(self):
+        return self.name
+    
+    def save(self, *args, **kwargs):
+        # Generate supplier code if not set
+        if not self.supplier_code:
+            prefix = 'SUP'
+            last_supplier = Supplier.objects.filter(organization=self.organization).order_by('-id').first()
+            if last_supplier and last_supplier.supplier_code.startswith(prefix):
+                try:
+                    last_number = int(last_supplier.supplier_code[len(prefix):])
+                    self.supplier_code = f"{prefix}{last_number + 1:04d}"
+                except ValueError:
+                    self.supplier_code = f"{prefix}0001"
+            else:
+                self.supplier_code = f"{prefix}0001"
+        
+        super().save(*args, **kwargs)
+    
+    def get_order_history(self):
+        """Get purchase order history from this supplier"""
+        # For future implementation with PurchaseOrder model
+        pass
+    
+    def get_performance_metrics(self):
+        """Calculate supplier performance metrics"""
+        # For future implementation (on-time delivery, quality, etc.)
+        return {
+            'total_orders': 0,  # Placeholder
+            'on_time_delivery_rate': 0,  # Placeholder
+            'quality_rating': 0,  # Placeholder
+        }
+
+
+class Buyer(models.Model):
+    PAYMENT_TERMS_CHOICES = [
+        ('prepaid', 'Prepaid'),
+        ('cod', 'Cash on Delivery'),
+        ('net_15', 'Net 15 Days'),
+        ('net_30', 'Net 30 Days'),
+        ('custom', 'Custom'),
+    ]
+    
+    name = models.CharField(max_length=200)
+    buyer_code = models.CharField(max_length=50, unique=True)
+    contact_person = models.CharField(max_length=100, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    phone = models.CharField(max_length=20, blank=True, null=True)
+    address = models.TextField(blank=True, null=True)
+    payment_terms = models.CharField(max_length=20, choices=PAYMENT_TERMS_CHOICES, default='prepaid')
+    credit_limit = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='buyers')
+    notes = models.TextField(blank=True, null=True)
+    active_status = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['name']),
+            models.Index(fields=['buyer_code']),
+            models.Index(fields=['organization']),
+            models.Index(fields=['active_status']),
+        ]
+        unique_together = ['name', 'organization']
+    
+    def __str__(self):
+        return self.name
+    
+    def save(self, *args, **kwargs):
+        # Generate buyer code if not set
+        if not self.buyer_code:
+            prefix = 'BUY'
+            last_buyer = Buyer.objects.filter(organization=self.organization).order_by('-id').first()
+            if last_buyer and last_buyer.buyer_code.startswith(prefix):
+                try:
+                    last_number = int(last_buyer.buyer_code[len(prefix):])
+                    self.buyer_code = f"{prefix}{last_number + 1:04d}"
+                except ValueError:
+                    self.buyer_code = f"{prefix}0001"
+            else:
+                self.buyer_code = f"{prefix}0001"
+        
+        super().save(*args, **kwargs)
+    
+    def get_order_history(self):
+        """Get order history from this buyer"""
+        return Order.objects.filter(customer_info__contains={'buyer_id': self.id})
+    
+    def get_current_credit_usage(self):
+        """Calculate current credit usage"""
+        unpaid_orders = Order.objects.filter(
+            customer_info__contains={'buyer_id': self.id},
+            payment_status__in=['unpaid', 'partially_paid']
+        )
+        return sum(order.total_amount for order in unpaid_orders)
+    
+    def has_available_credit(self, amount):
+        """Check if buyer has available credit for an order"""
+        current_usage = self.get_current_credit_usage()
+        return (current_usage + amount) <= self.credit_limit
+
+
+class Driver(models.Model):
+    name = models.CharField(max_length=200)
+    contact_info = models.CharField(max_length=100, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    phone = models.CharField(max_length=20, blank=True, null=True)
+    vehicle_details = models.TextField(blank=True, null=True)
+    license_number = models.CharField(max_length=50, blank=True, null=True)
+    active_status = models.BooleanField(default=True)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='drivers')
+    notes = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['name']),
+            models.Index(fields=['license_number']),
+            models.Index(fields=['organization']),
+            models.Index(fields=['active_status']),
+        ]
+    
+    def __str__(self):
+        return self.name
+    
+    def get_delivery_history(self):
+        """Get delivery history for this driver"""
+        # For future implementation with Delivery model
+        pass
 
 
 class Category(models.Model):
@@ -253,7 +412,7 @@ class Order(models.Model):
     
     order_number = models.CharField(max_length=20, unique=True)
     order_date = models.DateTimeField(auto_now_add=True)
-    customer = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
+    customer = models.ForeignKey(Buyer, on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')  # Update ForeignKey to Buyer
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='unpaid')
@@ -366,7 +525,7 @@ class OrderItem(models.Model):
 
 
 class ShippingAddress(models.Model):
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE)
+    customer = models.ForeignKey(Buyer, on_delete=models.CASCADE)  # Update ForeignKey to Buyer
     order = models.ForeignKey(Order, on_delete=models.CASCADE)
     address = models.CharField(max_length=200)
     city = models.CharField(max_length=200)
@@ -374,172 +533,6 @@ class ShippingAddress(models.Model):
     zipcode = models.CharField(max_length=200)
     country = models.CharField(max_length=200)
     date_added = models.DateTimeField(auto_now_add=True)
-
-
-class Supplier(models.Model):
-    PAYMENT_TERMS_CHOICES = [
-        ('immediate', 'Immediate'),
-        ('net_15', 'Net 15 Days'),
-        ('net_30', 'Net 30 Days'),
-        ('net_45', 'Net 45 Days'),
-        ('net_60', 'Net 60 Days'),
-        ('custom', 'Custom'),
-    ]
-    
-    name = models.CharField(max_length=200)
-    supplier_code = models.CharField(max_length=50, unique=True)
-    contact_person = models.CharField(max_length=100, blank=True, null=True)
-    email = models.EmailField(blank=True, null=True)
-    phone = models.CharField(max_length=20, blank=True, null=True)
-    address = models.TextField(blank=True, null=True)
-    payment_terms = models.CharField(max_length=20, choices=PAYMENT_TERMS_CHOICES, default='net_30')
-    active_status = models.BooleanField(default=True)
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='suppliers')
-    notes = models.TextField(blank=True, null=True)
-    website = models.URLField(blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    class Meta:
-        indexes = [
-            models.Index(fields=['name']),
-            models.Index(fields=['supplier_code']),
-            models.Index(fields=['organization']),
-            models.Index(fields=['active_status']),
-        ]
-        unique_together = ['name', 'organization']
-    
-    def __str__(self):
-        return self.name
-    
-    def save(self, *args, **kwargs):
-        # Generate supplier code if not set
-        if not self.supplier_code:
-            prefix = 'SUP'
-            last_supplier = Supplier.objects.filter(organization=self.organization).order_by('-id').first()
-            if last_supplier and last_supplier.supplier_code.startswith(prefix):
-                try:
-                    last_number = int(last_supplier.supplier_code[len(prefix):])
-                    self.supplier_code = f"{prefix}{last_number + 1:04d}"
-                except ValueError:
-                    self.supplier_code = f"{prefix}0001"
-            else:
-                self.supplier_code = f"{prefix}0001"
-        
-        super().save(*args, **kwargs)
-    
-    def get_order_history(self):
-        """Get purchase order history from this supplier"""
-        # For future implementation with PurchaseOrder model
-        pass
-    
-    def get_performance_metrics(self):
-        """Calculate supplier performance metrics"""
-        # For future implementation (on-time delivery, quality, etc.)
-        return {
-            'total_orders': 0,  # Placeholder
-            'on_time_delivery_rate': 0,  # Placeholder
-            'quality_rating': 0,  # Placeholder
-        }
-
-
-class Buyer(models.Model):
-    PAYMENT_TERMS_CHOICES = [
-        ('prepaid', 'Prepaid'),
-        ('cod', 'Cash on Delivery'),
-        ('net_15', 'Net 15 Days'),
-        ('net_30', 'Net 30 Days'),
-        ('custom', 'Custom'),
-    ]
-    
-    name = models.CharField(max_length=200)
-    buyer_code = models.CharField(max_length=50, unique=True)
-    contact_person = models.CharField(max_length=100, blank=True, null=True)
-    email = models.EmailField(blank=True, null=True)
-    phone = models.CharField(max_length=20, blank=True, null=True)
-    address = models.TextField(blank=True, null=True)
-    payment_terms = models.CharField(max_length=20, choices=PAYMENT_TERMS_CHOICES, default='prepaid')
-    credit_limit = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='buyers')
-    notes = models.TextField(blank=True, null=True)
-    active_status = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    class Meta:
-        indexes = [
-            models.Index(fields=['name']),
-            models.Index(fields=['buyer_code']),
-            models.Index(fields=['organization']),
-            models.Index(fields=['active_status']),
-        ]
-        unique_together = ['name', 'organization']
-    
-    def __str__(self):
-        return self.name
-    
-    def save(self, *args, **kwargs):
-        # Generate buyer code if not set
-        if not self.buyer_code:
-            prefix = 'BUY'
-            last_buyer = Buyer.objects.filter(organization=self.organization).order_by('-id').first()
-            if last_buyer and last_buyer.buyer_code.startswith(prefix):
-                try:
-                    last_number = int(last_buyer.buyer_code[len(prefix):])
-                    self.buyer_code = f"{prefix}{last_number + 1:04d}"
-                except ValueError:
-                    self.buyer_code = f"{prefix}0001"
-            else:
-                self.buyer_code = f"{prefix}0001"
-        
-        super().save(*args, **kwargs)
-    
-    def get_order_history(self):
-        """Get order history from this buyer"""
-        return Order.objects.filter(customer_info__contains={'buyer_id': self.id})
-    
-    def get_current_credit_usage(self):
-        """Calculate current credit usage"""
-        unpaid_orders = Order.objects.filter(
-            customer_info__contains={'buyer_id': self.id},
-            payment_status__in=['unpaid', 'partially_paid']
-        )
-        return sum(order.total_amount for order in unpaid_orders)
-    
-    def has_available_credit(self, amount):
-        """Check if buyer has available credit for an order"""
-        current_usage = self.get_current_credit_usage()
-        return (current_usage + amount) <= self.credit_limit
-
-
-class Driver(models.Model):
-    name = models.CharField(max_length=200)
-    contact_info = models.CharField(max_length=100, blank=True, null=True)
-    email = models.EmailField(blank=True, null=True)
-    phone = models.CharField(max_length=20, blank=True, null=True)
-    vehicle_details = models.TextField(blank=True, null=True)
-    license_number = models.CharField(max_length=50, blank=True, null=True)
-    active_status = models.BooleanField(default=True)
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='drivers')
-    notes = models.TextField(blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    class Meta:
-        indexes = [
-            models.Index(fields=['name']),
-            models.Index(fields=['license_number']),
-            models.Index(fields=['organization']),
-            models.Index(fields=['active_status']),
-        ]
-    
-    def __str__(self):
-        return self.name
-    
-    def get_delivery_history(self):
-        """Get delivery history for this driver"""
-        # For future implementation with Delivery model
-        pass
 
 
 class Notification(models.Model):
@@ -635,14 +628,6 @@ class Communication(models.Model):
             models.Index(fields=['organization']),
         ]
         ordering = ['-timestamp']
-        constraints = [
-            # Ensure communications occur within the same organization
-            models.CheckConstraint(
-                check=models.Q(sender__organization=models.F('organization')) & 
-                      models.Q(recipient__organization=models.F('organization')),
-                name='communication_within_organization'
-            )
-        ]
     
     def __str__(self):
         return f"From {self.sender.email} to {self.recipient.email}: {self.message[:50]}"

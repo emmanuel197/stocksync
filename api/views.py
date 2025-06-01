@@ -1,6 +1,6 @@
 from django.shortcuts import get_object_or_404
 from .serializers import ProductSerializer
-from .models import Product, Order, OrderItem, Customer, ShippingAddress, ProductImage, ProductSize
+from .models import Product, Order, OrderItem, ShippingAddress, ProductImage, ProductSize, Buyer
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import generics, status
@@ -61,8 +61,8 @@ class CreateOrUpdateOrderView(APIView):
         data = request.data
         product_id = data.get('product_id')
         product = get_object_or_404(Product, id=product_id)
-        customer, created = Customer.objects.get_or_create(user=request.user, first_name=request.user.first_name, last_name=request.user.last_name, email=request.user.email)
-        order, created = Order.objects.get_or_create(customer=customer, complete=False)
+        buyer, created = Buyer.objects.get_or_create(user=request.user, first_name=request.user.first_name, last_name=request.user.last_name, email=request.user.email)
+        order, created = Order.objects.get_or_create(customer=buyer, complete=False)
         order_item, created = OrderItem.objects.get_or_create(
             order=order, 
             product=product,
@@ -95,8 +95,8 @@ class CartDataView(APIView):
 
    
     def get(self, request, *args, **kwargs):
-        customer, created = Customer.objects.get_or_create(user=request.user, first_name=request.user.first_name, last_name=request.user.last_name, email=request.user.email)
-        order, order_created = Order.objects.get_or_create(customer=customer, complete=False)
+        buyer, created = Buyer.objects.get_or_create(user=request.user, first_name=request.user.first_name, last_name=request.user.last_name, email=request.user.email)
+        order, order_created = Order.objects.get_or_create(customer=buyer, complete=False)
         items = order.orderitem_set.all()
         
         if len(items) == 0:
@@ -122,8 +122,8 @@ class updateCartView(APIView):
         product_id = data.get('product_id')
         action = data.get('action')
         product = Product.objects.get(id=product_id)
-        customer, created = Customer.objects.get_or_create(user=request.user, first_name=request.user.first_name, last_name=request.user.last_name, email=request.user.email)
-        order, order_created  = Order.objects.get_or_create(customer=customer, complete=False)
+        buyer, created = Buyer.objects.get_or_create(user=request.user, first_name=request.user.first_name, last_name=request.user.last_name, email=request.user.email)
+        order, order_created  = Order.objects.get_or_create(customer=buyer, complete=False)
         order_item, order_item_created = OrderItem.objects.get_or_create(order=order, product=product)
 
 
@@ -184,12 +184,12 @@ class ProcessOrderView(APIView):
         shipping_info = request.data.get('shipping_info')
         total = request.data.get('total')
         
-        customer = request.user.customer
-        order, created = Order.objects.get_or_create(customer=customer, complete=False)
+        buyer = request.user.buyer
+        order, created = Order.objects.get_or_create(customer=buyer, complete=False)
 
         # Check if the user has the necessary permissions
-        # In this example, we'll assume that only the customer who placed the order or a superuser can process it
-        if request.user != customer.user and not request.user.is_superuser:
+        # In this example, we'll assume that only the buyer who placed the order or a superuser can process it
+        if request.user != buyer.user and not request.user.is_superuser:
             return Response({"error": "You do not have permission to process this order"}, status=status.HTTP_403_FORBIDDEN)
 
         # Add your order processing logic here
@@ -203,7 +203,7 @@ class ProcessOrderView(APIView):
     
         if order.shipping == True:
             ShippingAddress.objects.create(
-            customer=customer,
+            customer=buyer,
             order=order,
             address=shipping_info['address'],
             city=shipping_info['city'],
@@ -225,8 +225,8 @@ class UnAuthProcessOrderView(APIView):
         last_name = user_info['last_name']
         email = user_info['email']
 
-        customer, created = Customer.objects.get_or_create(first_name=first_name, last_name=last_name, email=email)
-        order, created = Order.objects.get_or_create(customer=customer, complete=False)
+        buyer, created = Buyer.objects.get_or_create(first_name=first_name, last_name=last_name, email=email)
+        order, created = Order.objects.get_or_create(customer=buyer, complete=False)
         cart = json.loads(request.COOKIES['cart'])
         for i in cart:
             if cart[i]['quantity'] > 0:  
@@ -244,7 +244,7 @@ class UnAuthProcessOrderView(APIView):
         
         if order.shipping == True:
             ShippingAddress.objects.create(
-            customer=customer,
+            customer=buyer,
             order=order,
             address=shipping_info['address'],
             city=shipping_info['city'],
