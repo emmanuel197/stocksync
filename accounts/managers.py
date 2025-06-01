@@ -1,6 +1,28 @@
 from django.db import models
 from django.db.models import Q
-from accounts.request_middleware import get_current_organization
+from accounts.request_middleware import get_current_organization, _thread_locals # Import _thread_locals
+from contextlib import contextmanager
+
+@contextmanager
+def set_current_organization(organization):
+    """Context manager to temporarily set the current organization for testing."""
+    # Create a mock request object and set the organization on it
+    class MockRequest:
+        def __init__(self, organization):
+            self.organization = organization
+            
+    mock_request = MockRequest(organization)
+    
+    original_request = getattr(_thread_locals, 'request', None)
+    _thread_locals.request = mock_request
+    try:
+        yield
+    finally:
+        if original_request is None:
+            if hasattr(_thread_locals, 'request'):
+                del _thread_locals.request
+        else:
+            _thread_locals.request = original_request
 
 
 class OrganizationModelManager(models.Manager):
@@ -86,21 +108,39 @@ class TenantAwareQuerySet(models.QuerySet):
         return super().update_or_create(defaults=defaults, **kwargs)
 
 
-class TenantManager(models.Manager):
+class BaseTenantManager(models.Manager):
     """
-    Manager for tenant-aware models.
+    Base manager for tenant-aware models.
     
     This manager uses TenantAwareQuerySet to ensure that all operations
     are filtered by the current organization.
     """
     
     def get_queryset(self):
-        return TenantAwareQuerySet(self.model, using=self._db)
+        queryset = TenantAwareQuerySet(self.model, using=self._db)
+        # Apply organization filtering here
+        request = getattr(_thread_locals, 'request', None) # Get request from thread locals
+        organization = None
+        if request and hasattr(request, 'organization'):
+            organization = request.organization
+
+        if organization and hasattr(self.model, 'organization'):
+            return queryset.filter(organization=organization)
+        return queryset
     
     def create(self, **kwargs):
-        """Create with organization filtering"""
+        """Create a new object, automatically setting organization if not provided"""
         if hasattr(self.model, 'organization') and 'organization' not in kwargs:
             organization = get_current_organization()
             if organization:
                 kwargs['organization'] = organization
         return super().create(**kwargs)
+    
+    def get_by_natural_key(self, *args, **kwargs):
+        """Override to ensure organization filtering"""
+        # Add organization to lookup if applicable
+        organization = get_current_organization()
+        if organization and hasattr(self.model, 'organization'):
+            kwargs['organization'] = organization
+            
+        return super().get_by_natural_key(*args, **kwargs)

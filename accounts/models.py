@@ -1,6 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
-from accounts.managers import TenantManager # Import TenantManager
+from accounts.managers import BaseTenantManager, TenantAwareQuerySet, get_current_organization # Import necessary classes
 
 
 class Organization(models.Model):
@@ -23,7 +23,7 @@ class Organization(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
-    objects = TenantManager() # Use TenantManager
+    objects = BaseTenantManager() # Use BaseTenantManager
 
     class Meta:
         indexes = [
@@ -36,7 +36,10 @@ class Organization(models.Model):
         return self.name
 
 
-class UserManager(BaseUserManager):
+class UserManager(BaseUserManager.from_queryset(TenantAwareQuerySet)): # Inherit from BaseUserManager and use TenantAwareQuerySet
+    """
+    Custom user manager that is tenant-aware and includes create_user/superuser methods.
+    """
     def create_user(self, email, username, password=None, **extra_fields):
         if not email:
             raise ValueError('Users must have an email address')
@@ -45,10 +48,12 @@ class UserManager(BaseUserManager):
         if 'organization' not in extra_fields or extra_fields['organization'] is None:
             # This will be used only if Organization exists, otherwise will be None
             try:
-                default_org = Organization.objects.filter(active_status=True).first()
+                # Use the base manager to avoid tenant filtering during creation of the first user/org
+                default_org = Organization.objects.base_manager.filter(active_status=True).first()
                 if default_org:
                     extra_fields['organization'] = default_org
-            except:
+            except Exception:
+                # Handle cases where Organization table might not exist yet (e.g., during initial migrations)
                 pass
                 
         user = self.model(
@@ -111,7 +116,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     updated_at = models.DateTimeField(auto_now=True, null=True)
 
-    objects = TenantManager() # Use TenantManager
+    objects = UserManager() # Use UserManager
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username', 'first_name', 'last_name']

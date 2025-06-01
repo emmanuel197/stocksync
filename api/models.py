@@ -2,7 +2,7 @@ from django.db import models
 from accounts.models import User, Organization
 from decimal import Decimal
 import random, string
-from accounts.managers import TenantManager  # Import TenantManager
+from accounts.managers import BaseTenantManager  # Import BaseTenantManager
 
 # Create your models here.
 
@@ -10,7 +10,7 @@ from accounts.managers import TenantManager  # Import TenantManager
 class Brand(models.Model):
     name = models.CharField(max_length=200)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='brands')  # Add organization ForeignKey
-    objects = TenantManager()  # Use TenantManager
+    objects = BaseTenantManager()  # Use BaseTenantManager
 
     def __str__(self):
         return self.name
@@ -39,7 +39,7 @@ class Supplier(models.Model):
     website = models.URLField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    objects = TenantManager()  # Use TenantManager
+    objects = BaseTenantManager()  # Use BaseTenantManager
     
     class Meta:
         indexes = [
@@ -106,7 +106,7 @@ class Buyer(models.Model):
     active_status = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    objects = TenantManager()  # Use TenantManager
+    objects = BaseTenantManager()  # Use BaseTenantManager
     
     class Meta:
         indexes = [
@@ -166,7 +166,7 @@ class Driver(models.Model):
     notes = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    objects = TenantManager()  # Use TenantManager
+    objects = BaseTenantManager()  # Use BaseTenantManager
     
     class Meta:
         indexes = [
@@ -192,7 +192,7 @@ class Category(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='categories')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    objects = TenantManager()  # Use TenantManager
+    objects = BaseTenantManager()  # Use BaseTenantManager
 
     class Meta:
         verbose_name_plural = 'Categories'
@@ -221,7 +221,7 @@ class Product(models.Model):
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    objects = TenantManager()  # Use TenantManager
+    objects = BaseTenantManager()  # Use BaseTenantManager
 
     class Meta:
         indexes = [
@@ -284,7 +284,7 @@ class Location(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    objects = TenantManager()  # Use TenantManager
+    objects = BaseTenantManager()  # Use BaseTenantManager
 
     class Meta:
         indexes = [
@@ -305,7 +305,7 @@ class Inventory(models.Model):
     max_stock_level = models.IntegerField(default=100, help_text="Maximum stock level")
     last_updated = models.DateTimeField(auto_now=True)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='inventory_items')
-    objects = TenantManager()  # Use TenantManager
+    objects = BaseTenantManager()  # Use BaseTenantManager
 
     class Meta:
         verbose_name_plural = 'Inventory Items'
@@ -380,7 +380,7 @@ class InventoryMovement(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
-    objects = TenantManager()  # Use TenantManager
+    objects = BaseTenantManager()  # Use BaseTenantManager
 
     class Meta:
         indexes = [
@@ -432,7 +432,7 @@ class Order(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='orders')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_orders')
     updated_at = models.DateTimeField(auto_now=True)
-    objects = TenantManager()  # Use TenantManager
+    objects = BaseTenantManager()  # Use BaseTenantManager
     
     class Meta:
         indexes = [
@@ -509,7 +509,7 @@ class OrderItem(models.Model):
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     subtotal = models.DecimalField(max_digits=10, decimal_places=2)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
-    objects = TenantManager()  # Use TenantManager
+    objects = BaseTenantManager()  # Use BaseTenantManager
     
     class Meta:
         indexes = [
@@ -566,7 +566,7 @@ class Notification(models.Model):
     related_object_type = models.CharField(max_length=50, blank=True, null=True, help_text="Type of related object (e.g., 'order', 'product')")
     related_object_id = models.PositiveIntegerField(blank=True, null=True, help_text="ID of related object")
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='notifications')
-    objects = TenantManager()  # Use TenantManager
+    objects = BaseTenantManager()  # Use BaseTenantManager
     
     class Meta:
         indexes = [
@@ -631,7 +631,7 @@ class Communication(models.Model):
     related_object_type = models.CharField(max_length=50, blank=True, null=True)
     related_object_id = models.PositiveIntegerField(blank=True, null=True)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='communications')
-    objects = TenantManager()  # Use TenantManager
+    objects = BaseTenantManager()  # Use BaseTenantManager
     
     class Meta:
         indexes = [

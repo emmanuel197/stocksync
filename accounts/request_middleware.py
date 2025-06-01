@@ -1,6 +1,6 @@
 from threading import local
 
-_thread_locals = local()
+_thread_locals = local() # Define _thread_locals here
 
 def get_current_request():
     """
