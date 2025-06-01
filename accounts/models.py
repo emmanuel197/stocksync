@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from accounts.managers import TenantManager # Import TenantManager
 
 
 class Organization(models.Model):
@@ -22,6 +23,8 @@ class Organization(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+    objects = TenantManager() # Use TenantManager
+
     class Meta:
         indexes = [
             models.Index(fields=['name']),
@@ -108,7 +111,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     updated_at = models.DateTimeField(auto_now=True, null=True)
 
-    objects = UserManager()
+    objects = TenantManager() # Use TenantManager
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username', 'first_name', 'last_name']
