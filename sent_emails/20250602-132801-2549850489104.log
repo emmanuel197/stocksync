@@ -1,0 +1,33 @@
+Content-Type: multipart/alternative;
+ boundary="===============2756196456351281836=="
+MIME-Version: 1.0
+Subject: 127.0.0.1:8000 - Your account has been successfully created and
+ activated!
+From: webmaster@localhost
+To: supplier.admin@orgb.com
+Date: Mon, 02 Jun 2025 13:28:01 -0000
+Message-ID: <174887088189.32576.1265730377506276614@LAPTOP-2PJL7L4A>
+
+--===============2756196456351281836==
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+
+Your account has been created and is ready to use!
+
+Thanks for using our site!
+
+The 127.0.0.1:8000 team
+--===============2756196456351281836==
+Content-Type: text/html; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+
+<p>Your account has been created and is ready to use!</p>
+
+<p>Thanks for using our site!</p>
+
+<p>The 127.0.0.1:8000 team</p>
+--===============2756196456351281836==--
+
+-------------------------------------------------------------------------------

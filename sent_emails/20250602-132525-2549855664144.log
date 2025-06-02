@@ -1,0 +1,38 @@
+Content-Type: multipart/alternative;
+ boundary="===============1216916848656632666=="
+MIME-Version: 1.0
+Subject: Account activation on 127.0.0.1:8000
+From: webmaster@localhost
+To: supplier.admin@orgb.com
+Date: Mon, 02 Jun 2025 13:25:25 -0000
+Message-ID: <174887072579.32576.17388221724714806196@LAPTOP-2PJL7L4A>
+
+--===============1216916848656632666==
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+
+You're receiving this email because you need to finish activation process on 127.0.0.1:8000.
+
+Please go to the following page to activate account:
+http://127.0.0.1:8000/activate/MTE/cqrumd-f4c9daf195a05564303f207fff01bf1d
+
+Thanks for using our site!
+
+The 127.0.0.1:8000 team
+--===============1216916848656632666==
+Content-Type: text/html; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+
+<p>You're receiving this email because you need to finish activation process on 127.0.0.1:8000.</p>
+
+<p>Please go to the following page to activate account:</p>
+<p><a href="http://127.0.0.1:8000/activate/MTE/cqrumd-f4c9daf195a05564303f207fff01bf1d">http://127.0.0.1:8000/activate/MTE/cqrumd-f4c9daf195a05564303f207fff01bf1d</a></p>
+
+<p>Thanks for using our site!</p>
+
+<p>The 127.0.0.1:8000 team</p>
+--===============1216916848656632666==--
+
+-------------------------------------------------------------------------------
