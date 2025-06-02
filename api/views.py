@@ -2,7 +2,8 @@ from django.shortcuts import get_object_or_404
 from .serializers import (
     ProductSerializer, OrganizationSerializer, BuyerSerializer, SupplierSerializer, DriverSerializer, 
     OrganizationOnboardingSerializer, OrganizationRelationshipSerializer, PotentialSupplierSerializer,
-    InventorySerializer, InventoryMovementSerializer
+    InventorySerializer, InventoryMovementSerializer, ProductCreateSerializer, InventoryCreateSerializer,
+    BrandSerializer, CategorySerializer
 )
 from .models import (
     Product, Order, OrderItem, ShippingAddress, ProductImage, ProductSize, Buyer, Brand, Supplier, Driver, 
@@ -12,11 +13,10 @@ from accounts.models import Organization, OrganizationRelationship, User
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import generics, status, serializers
-
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.authentication import JWTAuthentication
 import json
-from django.db.models import Q, Prefetch
+from django.db.models import Q, Prefetch, Sum
 from .filters import ProductFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from django.core.mail import EmailMessage, send_mail
@@ -514,6 +514,45 @@ class InventoryDetailView(generics.RetrieveAPIView):
         return queryset
 
 
+class InventoryCreateView(generics.CreateAPIView):
+    """
+    Allows users from supplier or 'both' organizations to add inventory items.
+    Ensures the product and location belong to the user's organization.
+    """
+    queryset = Inventory.objects.all()
+    serializer_class = InventoryCreateSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrManager]
+
+    def perform_create(self, serializer):
+        serializer.save()
+
+class InventoryUpdateView(generics.RetrieveUpdateAPIView):
+    """
+    Allows users from supplier or 'both' organizations to update inventory quantity.
+    Ensures the inventory item belongs to the user's organization.
+    """
+    queryset = Inventory.objects.all()
+    serializer_class = InventorySerializer
+    permission_classes = [IsAuthenticated, IsAdminOrManager]
+    lookup_field = 'pk'
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            return Inventory.objects.none()
+
+        if organization.organization_type in ['supplier', 'both', 'internal']:
+             queryset = Inventory.objects.filter(product__organization=organization)
+             return queryset
+        else:
+            return Inventory.objects.none()
+
+    def update(self, request, *args, **kwargs):
+        return super().update(request, *args, **kwargs)
+
+
 class InventoryMovementListView(generics.ListAPIView):
     """
     List inventory movements for inventory items accessible to the
@@ -547,3 +586,109 @@ class InventoryMovementListView(generics.ListAPIView):
             queryset = InventoryMovement.objects.none()
 
         return queryset.order_by('-timestamp')
+
+class ProductCreateView(generics.CreateAPIView):
+    """
+    Allows users from supplier or 'both' organizations to create new products.
+    """
+    queryset = Product.objects.all()
+    serializer_class = ProductCreateSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrManager]
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        organization = user.organization
+        if organization and organization.organization_type in ['supplier', 'both', 'internal']:
+            serializer.save(organization=organization)
+        else:
+            raise serializers.ValidationError("Your organization type is not authorized to create products.")
+
+class BrandListView(generics.ListCreateAPIView):
+    """
+    Lists and allows creation of Brands for the authenticated user's organization.
+    """
+    serializer_class = BrandSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrManager]
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            return Brand.objects.none()
+
+        # Only list brands belonging to the user's organization
+        return Brand.objects.filter(organization=organization).order_by('name')
+
+    def perform_create(self, serializer):
+        # Associate the brand with the authenticated user's organization
+        user = self.request.user
+        organization = user.organization
+        if organization and organization.organization_type in ['supplier', 'both', 'internal']:
+            serializer.save(organization=organization)
+        else:
+            raise serializers.ValidationError("Your organization type is not authorized to create brands.")
+
+class BrandDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieves, updates, or deletes a specific Brand belonging to the
+    authenticated user's organization.
+    """
+    serializer_class = BrandSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrManager]
+    lookup_field = 'pk'
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            return Brand.objects.none()
+
+        # Only allow access to brands belonging to the user's organization
+        return Brand.objects.filter(organization=organization)
+
+class CategoryListView(generics.ListCreateAPIView):
+    """
+    Lists and allows creation of Categories for the authenticated user's organization.
+    """
+    serializer_class = CategorySerializer
+    permission_classes = [IsAuthenticated, IsAdminOrManager]
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            return Category.objects.none()
+
+        # Only list categories belonging to the user's organization
+        return Category.objects.filter(organization=organization).order_by('name')
+
+    def perform_create(self, serializer):
+        # Associate the category with the authenticated user's organization
+        user = self.request.user
+        organization = user.organization
+        if organization and organization.organization_type in ['supplier', 'both', 'internal']:
+            serializer.save(organization=organization)
+        else:
+            raise serializers.ValidationError("Your organization type is not authorized to create categories.")
+
+class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieves, updates, or deletes a specific Category belonging to the
+    authenticated user's organization.
+    """
+    serializer_class = CategorySerializer
+    permission_classes = [IsAuthenticated, IsAdminOrManager]
+    lookup_field = 'pk'
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            return Category.objects.none()
+
+        # Only allow access to categories belonging to the user's organization
+        return Category.objects.filter(organization=organization)

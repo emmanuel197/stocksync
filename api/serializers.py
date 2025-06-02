@@ -61,6 +61,16 @@ class ProductSerializer(serializers.ModelSerializer):
 
         return False
 
+class ProductCreateSerializer(serializers.ModelSerializer):
+    # Fields that can be written to
+    brand = serializers.SlugRelatedField(slug_field='name', queryset=Brand.objects.all(), allow_null=True, required=False)
+    # Note: 'organization' will be set automatically in the view
+
+    class Meta:
+        model = Product
+        fields = ('id', 'name', 'price', 'discount_price', 'brand', 'image', 'description')
+        read_only_fields = ('id',)
+
 class OrganizationSerializer(serializers.ModelSerializer):
     """Serializer for the Organization model."""
     class Meta:
@@ -297,6 +307,38 @@ class InventorySerializer(serializers.ModelSerializer):
         elif request and (not request.user or not request.user.is_authenticated or not request.user.organization):
             self.fields.pop('quantity', None)
 
+class InventoryCreateSerializer(serializers.ModelSerializer):
+    # Use PrimaryKeyRelatedField for product and location to allow writing their IDs
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
+    location = serializers.PrimaryKeyRelatedField(queryset=Location.objects.all())
+
+    class Meta:
+        model = Inventory
+        fields = [
+            'id', 'product', 'location', 'quantity'
+        ]
+        read_only_fields = ('id',)
+
+    def validate(self, data):
+        # Ensure the product and location belong to the authenticated user's organization
+        request = self.context.get('request')
+        user_organization = request.user.organization
+
+        product = data.get('product')
+        location = data.get('location')
+
+        if product and product.organization != user_organization:
+            raise serializers.ValidationError({"product": "You can only add inventory for products belonging to your organization."})
+
+        if location and location.organization != user_organization:
+            raise serializers.ValidationError({"location": "You can only add inventory to locations belonging to your organization."})
+
+        # Check if an inventory item for this product and location already exists
+        if Inventory.objects.filter(product=product, location=location).exists():
+             raise serializers.ValidationError({"non_field_errors": "Inventory for this product at this location already exists. Consider updating the existing item."})
+
+        return data
+
 class InventoryMovementSerializer(serializers.ModelSerializer):
     inventory = InventorySerializer(read_only=True, context={'request': None})
     moved_by = serializers.SlugRelatedField(slug_field='email', read_only=True)
@@ -317,3 +359,41 @@ class InventoryMovementSerializer(serializers.ModelSerializer):
 
         if 'inventory' in self.fields:
             self.fields['inventory'].context['request'] = request
+
+# Modified BrandSerializer
+class BrandSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Brand
+        fields = ['id', 'name']
+        read_only_fields = []
+
+# Modified CategorySerializer
+class CategorySerializer(serializers.ModelSerializer):
+    parent = serializers.PrimaryKeyRelatedField(
+        queryset=Category.objects.all(), allow_null=True, required=False
+    )
+    parent_name = serializers.CharField(source='parent.name', read_only=True, allow_null=True)
+
+    class Meta:
+        model = Category
+        fields = ['id', 'name', 'description', 'parent', 'parent_name']
+        read_only_fields = []
+
+    def validate(self, data):
+        request = self.context.get('request')
+        user_organization = request.user.organization
+        name = data.get('name')
+        parent = data.get('parent')
+
+        queryset = Category.objects.filter(name=name, organization=user_organization)
+
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError({"name": "A category with this name already exists in your organization."})
+
+        if self.instance and parent and self.instance.pk == parent.pk:
+             raise serializers.ValidationError({"parent": "A category cannot be its own parent."})
+
+        return data
