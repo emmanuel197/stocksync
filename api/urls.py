@@ -12,7 +12,7 @@ urlpatterns = [
     path('products/filter/', FilteredProductListView.as_view()),
     path('onboarding/', OrganizationOnboardingView.as_view(), name='organization-onboarding'),
     path('organizations/activate/<uuid:token>/', OrganizationActivationView.as_view(), name='activate-organization'),
-    path('buyers/', BuyerCreateView.as_view(), name='buyer-create'),
-    path('suppliers/', SupplierCreateView.as_view(), name='supplier-create'),
-    path('drivers/', DriverCreateView.as_view(), name='driver-create'),
+    path('relationships/', OrganizationRelationshipListView.as_view(), name='relationship-list'),
+    path('relationships/request/', OrganizationRelationshipRequestView.as_view(), name='relationship-request'),
+    path('relationships/<int:pk>/update/', OrganizationRelationshipUpdateView.as_view(), name='relationship-update'),
 ]

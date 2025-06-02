@@ -1,17 +1,25 @@
-import uuid # Import uuid
+import uuid
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
-from accounts.managers import BaseTenantManager, TenantAwareQuerySet, get_current_organization # Import necessary classes
+from django.utils.translation import gettext_lazy as _
+from django.db.models import Q
 
 
 class Organization(models.Model):
+    ORGANIZATION_TYPE_CHOICES = [
+        ('buyer', 'Buyer Organization'),
+        ('supplier', 'Supplier Organization'),
+        ('both', 'Buyer and Supplier Organization'),
+        ('internal', 'Internal Organization'),
+    ]
+
     name = models.CharField(max_length=255, unique=True)
     logo = models.ImageField(upload_to='organization_logos/', null=True, blank=True)
     address = models.TextField(blank=True, null=True)
     contact_email = models.EmailField(blank=True, null=True)
     contact_phone = models.CharField(max_length=20, blank=True, null=True)
     subscription_plan = models.CharField(
-        max_length=50, 
+        max_length=50,
         default='free',
         choices=[
             ('free', 'Free'),
@@ -20,75 +28,92 @@ class Organization(models.Model):
             ('enterprise', 'Enterprise')
         ]
     )
-    active_status = models.BooleanField(default=False) # Set default to False
-    activation_token = models.UUIDField(default=uuid.uuid4, editable=False, unique=True) # Add activation token field
-    email_sent = models.BooleanField(default=False) # Add field to track if email was sent
+    organization_type = models.CharField(max_length=20, choices=ORGANIZATION_TYPE_CHOICES, default='buyer')
+    active_status = models.BooleanField(default=False)
+    activation_token = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    email_sent = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
-    objects = BaseTenantManager() # Use BaseTenantManager
 
     class Meta:
         indexes = [
             models.Index(fields=['name']),
             models.Index(fields=['subscription_plan']),
             models.Index(fields=['active_status']),
-            models.Index(fields=['activation_token']), # Add index for activation token
+            models.Index(fields=['activation_token']),
+            models.Index(fields=['organization_type']),
         ]
-        
+
     def __str__(self):
         return self.name
 
 
-class UserManager(BaseUserManager.from_queryset(TenantAwareQuerySet)): # Inherit from BaseUserManager and use TenantAwareQuerySet
+class OrganizationRelationship(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('rejected', 'Rejected'),
+    ]
+
+    buyer_organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='buying_relationships',
+        limit_choices_to={'organization_type__in': ['buyer', 'both']}
+    )
+    supplier_organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='supplying_relationships',
+        limit_choices_to={'organization_type__in': ['supplier', 'both']}
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    initiated_by = models.ForeignKey('User', on_delete=models.SET_NULL, null=True, blank=True, related_name='initiated_relationships')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('buyer_organization', 'supplier_organization')
+        indexes = [
+            models.Index(fields=['buyer_organization', 'supplier_organization']),
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"{self.buyer_organization.name} buys from {self.supplier_organization.name} ({self.status})"
+
+
+class UserManager(BaseUserManager):
     """
-    Custom user manager that is tenant-aware and includes create_user/superuser methods.
+    Custom user model manager where email is the unique identifiers
+    for authentication instead of usernames.
     """
-    def create_user(self, email, username, password=None, **extra_fields):
+    def create_user(self, email, username, password=None, organization=None, role='staff', **extra_fields):
         if not email:
-            raise ValueError('Users must have an email address')
-        
-        # Set default organization if not provided
-        if 'organization' not in extra_fields or extra_fields['organization'] is None:
-            # This will be used only if Organization exists, otherwise will be None
-            try:
-                # Use the base manager to avoid tenant filtering during creation of the first user/org
-                default_org = Organization.objects.base_manager.filter(active_status=True).first()
-                if default_org:
-                    extra_fields['organization'] = default_org
-            except Exception:
-                # Handle cases where Organization table might not exist yet (e.g., during initial migrations)
-                pass
-                
-        user = self.model(
-            email=self.normalize_email(email), 
-            username=username, 
-            **extra_fields
-        )
+            raise ValueError(_('The Email must be set'))
+        if not username:
+            raise ValueError(_('The Username must be set'))
+
+        email = self.normalize_email(email)
+        user = self.model(email=email, username=username, organization=organization, role=role, **extra_fields)
         user.set_password(password)
         user.save()
         return user
 
     def create_superuser(self, email, username, password=None, **extra_fields):
-        # For superuser, try to get or create a default organization
-        try:
-            organization, _ = Organization.objects.get_or_create(
-                name='System Administration',
-                defaults={
-                    'subscription_plan': 'enterprise',
-                }
-            )
-            extra_fields['organization'] = organization
-        except:
-            # If we're running migrations, Organization table might not exist yet
-            pass
-            
-        user = self.create_user(email, username, password=password, **extra_fields)
-        user.role = 'admin'
-        user.is_admin = True
-        user.is_superuser = True
-        user.save()
-        return user
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('is_superuser', True)
+        extra_fields.setdefault('is_active', True)
+        extra_fields.setdefault('role', 'admin')
+
+        if extra_fields.get('is_staff') is not True:
+            raise ValueError(_('Superuser must have is_staff=True.'))
+        if extra_fields.get('is_superuser') is not True:
+            raise ValueError(_('Superuser must have is_superuser=True.'))
+
+        extra_fields.pop('organization', None)
+
+        return self.create_user(email, username, password, organization=None, **extra_fields)
 
 
 class User(AbstractBaseUser, PermissionsMixin):
@@ -97,64 +122,40 @@ class User(AbstractBaseUser, PermissionsMixin):
         ('manager', 'Manager'),
         ('staff', 'Staff'),
     ]
-    
-    email = models.EmailField(verbose_name='email address', max_length=255, unique=True)
-    username = models.CharField(max_length=30, unique=True, default="JohnDoe123")
-    first_name = models.CharField(max_length=255, default='John')
-    last_name = models.CharField(max_length=255, default='Doe')
-    is_active = models.BooleanField(default=True)
-    is_admin = models.BooleanField(default=False)
-    
-    # New fields for role-based access and multi-tenant support
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='staff')
-    profile_image = models.ImageField(upload_to='profile_images/', null=True, blank=True)
-    phone_number = models.CharField(max_length=20, blank=True, null=True)
-    organization = models.ForeignKey(
-        Organization, 
-        on_delete=models.SET_NULL, 
-        null=True, 
-        blank=True,
-        related_name='users'
-    )
-    
-    created_at = models.DateTimeField(auto_now_add=True, null=True)
-    updated_at = models.DateTimeField(auto_now=True, null=True)
 
-    objects = UserManager() # Use UserManager
+    email = models.EmailField(_('email address'), unique=True)
+    username = models.CharField(_('username'), max_length=150, unique=True)
+    first_name = models.CharField(_('first name'), max_length=150, blank=True)
+    last_name = models.CharField(_('last name'), max_length=150, blank=True)
+    is_staff = models.BooleanField(_('staff status'), default=False,
+        help_text=_('Designates whether the user can log into this admin site.'))
+    is_active = models.BooleanField(_('active'), default=True,
+        help_text=_('Designates whether this user should be treated as active. '
+                   'Unselect this instead of deleting accounts.'))
+    date_joined = models.DateTimeField(_('date joined'), auto_now_add=True)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='users', null=True, blank=True)
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='staff')
+    phone_number = models.CharField(max_length=20, blank=True, null=True)
+
+    objects = UserManager()
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username', 'first_name', 'last_name']
 
     class Meta:
-        indexes = [
-            models.Index(fields=['role']),
-            models.Index(fields=['organization']),
-        ]
+        verbose_name = _('user')
+        verbose_name_plural = _('users')
 
     def __str__(self):
         return self.email
 
-    def has_perm(self, perm, obj=None):
-        # Check if the user has the required permission
-        if self.is_admin:
-            return True
-            
-        # Check if the user has the required permission to view a custom user
-        required_permission = "accounts.view_user"
-        return self.is_active and self.user_permissions.filter(codename=perm.split('.')[1]).exists()
-    
-    def has_module_perms(self, app_label):
-        # Admin users have access to all modules
-        return self.is_admin or self.is_active
+    def get_full_name(self):
+        full_name = '%s %s' % (self.first_name, self.last_name)
+        return full_name.strip()
+
+    def get_short_name(self):
+        return self.first_name
 
     @property
-    def is_superuser(self):
-        return self.is_admin
-
-    @is_superuser.setter
-    def is_superuser(self, value):
-        self.is_admin = value
-
-    @property
-    def is_staff(self):
-        return self.is_admin or self.role in ['admin', 'manager']
+    def is_admin(self):
+        return self.is_superuser or self.role == 'admin'

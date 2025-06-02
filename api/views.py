@@ -1,27 +1,34 @@
 from django.shortcuts import get_object_or_404
-from .serializers import ProductSerializer, OrganizationSerializer, BuyerSerializer, SupplierSerializer, DriverSerializer, OrganizationOnboardingSerializer # Import new serializers
-from .models import Product, Order, OrderItem, ShippingAddress, ProductImage, ProductSize, Buyer, Brand, Supplier, Driver, Category, Location, Inventory, InventoryMovement # Import new models
+from .serializers import (
+    ProductSerializer, OrganizationSerializer, BuyerSerializer, SupplierSerializer, DriverSerializer, 
+    OrganizationOnboardingSerializer, OrganizationRelationshipSerializer
+)
+from .models import (
+    Product, Order, OrderItem, ShippingAddress, ProductImage, ProductSize, Buyer, Brand, Supplier, Driver, 
+    Category, Location, Inventory, InventoryMovement
+)
+from accounts.models import Organization, OrganizationRelationship
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import generics, status
-from rest_framework.permissions import IsAuthenticated, AllowAny # Import AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.authentication import JWTAuthentication
 import json
 from django.db.models import Q
 from .filters import ProductFilter
 from django_filters.rest_framework import DjangoFilterBackend
-from django.core.mail import EmailMessage, send_mail # Import send_mail
-from django.template.loader import render_to_string # Import render_to_string
+from django.core.mail import EmailMessage, send_mail
+from django.template.loader import render_to_string
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import Prefetch
-from django.urls import reverse # Import reverse
-from django.utils.encoding import force_bytes # Import force_bytes
-from django.utils.http import urlsafe_base64_encode # Import urlsafe_base64_encode
-from accounts.permissions import IsBuyer, IsAdminOrManager, IsStaff # Import custom permissions
-
-from accounts.models import Organization, User # Import Organization and User models
-from djoser.conf import settings as djoser_settings # Import Djoser settings
+from django.urls import reverse
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
+from accounts.permissions import IsBuyer, IsAdminOrManager, IsStaff
+from accounts.models import Organization, User
+from djoser.conf import settings as djoser_settings
+from django.db import transaction
 
 # Create your views here.
 class ProductAPIView(generics.ListAPIView):
@@ -30,17 +37,17 @@ class ProductAPIView(generics.ListAPIView):
         Prefetch('sizes', queryset=ProductSize.objects.all())
     )
     serializer_class = ProductSerializer
-    permission_classes = [IsAuthenticated] # Accessible to all authenticated users
+    permission_classes = [IsAuthenticated]
 
 class FilteredProductListView(generics.ListAPIView):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
     filter_backends = [DjangoFilterBackend]
     filterset_class = ProductFilter
-    permission_classes = [IsAuthenticated] # Accessible to all authenticated users
+    permission_classes = [IsAuthenticated]
 
 class ProductSearchView(APIView):
-    permission_classes = [IsAuthenticated] # Accessible to all authenticated users
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
         query = self.request.GET.get('q')
@@ -51,7 +58,6 @@ class ProductSearchView(APIView):
         return Response([], status=status.HTTP_200_OK)
     
 def get_item_list(items):
-    
     return [
         {
             'id': item.product.id,
@@ -64,9 +70,11 @@ def get_item_list(items):
         }
         for item in items
     ]
+
 class CreateOrUpdateOrderView(APIView):
-    permission_classes = [IsAuthenticated, IsBuyer] # Accessible to authenticated Buyers
+    permission_classes = [IsAuthenticated, IsBuyer]
     authentication_classes = [JWTAuthentication]
+
     def post(self, request, *args, **kwargs):
         data = request.data
         product_id = data.get('product_id')
@@ -98,12 +106,10 @@ class CreateOrUpdateOrderView(APIView):
                 'total_cost': order.get_cart_total,
                 'updated_item': item_data}, status=status.HTTP_200_OK)
 
-    
 class CartDataView(APIView):
-    permission_classes = [IsAuthenticated, IsBuyer] # Accessible to authenticated Buyers
-    authentication_classes =[JWTAuthentication]
+    permission_classes = [IsAuthenticated, IsBuyer]
+    authentication_classes = [JWTAuthentication]
 
-   
     def get(self, request, *args, **kwargs):
         buyer, created = Buyer.objects.get_or_create(user=request.user, first_name=request.user.first_name, last_name=request.user.last_name, email=request.user.email)
         order, order_created = Order.objects.get_or_create(customer=buyer, complete=False)
@@ -124,8 +130,8 @@ class CartDataView(APIView):
         return Response(cart_data)
 
 class updateCartView(APIView):
-    authentication_classes = [  JWTAuthentication ]
-    permission_classes = [ IsAuthenticated, IsBuyer ] # Accessible to authenticated Buyers
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, IsBuyer]
     
     def post(self, request, format=None):
         data = request.data
@@ -136,9 +142,7 @@ class updateCartView(APIView):
         order, order_created  = Order.objects.get_or_create(customer=buyer, complete=False)
         order_item, order_item_created = OrderItem.objects.get_or_create(order=order, product=product)
 
-
         if 'add' == action:
-
             order_item.quantity += 1
             order_item.save()
         elif 'remove' == action:
@@ -164,12 +168,11 @@ class updateCartView(APIView):
         except OrderItem.DoesNotExist:
             return Response({'item_id': product_id, 'total_items': order.get_cart_items,
                 'total_cost': order.get_cart_total, 'error': 'Item does not exist'}, status=status.HTTP_200_OK)
-        
 
 def send_purchase_confirmation_email(user_email, first_name, order, total):
     shipping_address = None
     if order.shipping:
-        shipping_address = order.shippingaddress_set.all().first()  # Assuming you have a ShippingAddress model associated with the order
+        shipping_address = order.shippingaddress_set.all().first()
      
     template = render_to_string('api/email_template.html', {'order': order,
                                                             'orderitems': order.orderitem_set.all(),
@@ -187,8 +190,9 @@ def send_purchase_confirmation_email(user_email, first_name, order, total):
     email.send()
 
 class ProcessOrderView(APIView):
-    permission_classes = [ IsAuthenticated, IsAdminOrManager | IsStaff ] # Accessible to authenticated Staff, Managers, or Admins
-    authentication_classes = [ JWTAuthentication ]
+    permission_classes = [IsAuthenticated, IsAdminOrManager | IsStaff]
+    authentication_classes = [JWTAuthentication]
+
     def post(self, request, format=None):         
         user_info = request.data.get('user_info')
         shipping_info = request.data.get('shipping_info')
@@ -197,10 +201,6 @@ class ProcessOrderView(APIView):
         buyer = request.user.buyer
         order, created = Order.objects.get_or_create(customer=buyer, complete=False)
 
-        # Add your order processing logic here
-
-        # For example, you might update the order's status to 'processed'
-        
         if total == float(order.get_cart_total):
             order.complete = True
             order.date_completed = timezone.now()
@@ -218,7 +218,6 @@ class ProcessOrderView(APIView):
             )
         send_purchase_confirmation_email(request.user.email, request.user.first_name, order, total)
 
-        
         return Response({'order_status': order.complete, 'redirect': '/'}, status=status.HTTP_200_OK)
 
 class UnAuthProcessOrderView(APIView):
@@ -262,9 +261,7 @@ class UnAuthProcessOrderView(APIView):
         return Response({'order_status': order.complete, 'redirect': '/'}, status=status.HTTP_200_OK)
 
 def send_organization_activation_email(organization):
-    """Sends an activation email to the organization's contact email."""
     subject = 'Activate Your StockSync Organization'
-    # Construct the activation link
     activation_link = settings.FRONTEND_URL + reverse('api:activate-organization', kwargs={'token': organization.activation_token})
 
     template = render_to_string('api/organization_activation_email.html', {
@@ -274,8 +271,8 @@ def send_organization_activation_email(organization):
 
     email = EmailMessage(
         subject,
-        template, # Use the rendered template directly as the body
-        settings.EMAIL_HOST_USER, # Use EMAIL_HOST_USER as the sender to match the format
+        template,
+        settings.EMAIL_HOST_USER,
         [organization.contact_email],
     )
     email.fail_silently = False
@@ -284,30 +281,24 @@ def send_organization_activation_email(organization):
         email.send()
         organization.email_sent = True
         organization.save(update_fields=['email_sent'])
-        print(f"Activation email sent successfully to {organization.contact_email}") # Debug print
+        print(f"Activation email sent successfully to {organization.contact_email}")
     except Exception as e:
         print(f"Error sending activation email to {organization.contact_email}: {e}")
-        # Optionally handle the error, e.g., log it or mark the organization for manual activation
 
 class OrganizationCreateView(generics.CreateAPIView):
-    """API endpoint for creating a new Organization."""
     queryset = Organization.objects.all()
     serializer_class = OrganizationSerializer
-    permission_classes = [AllowAny] # Or restrict as needed for your onboarding flow
+    permission_classes = [AllowAny]
 
     def perform_create(self, serializer):
-        # Save the organization with active_status=False by default
         organization = serializer.save(active_status=False)
-        # Send activation email
         if organization.contact_email:
             try:
                 send_organization_activation_email(organization)
             except Exception as e:
                 print(f"Error sending activation email to {organization.contact_email}: {e}")
-                # Optionally handle the error, e.g., log it or mark the organization for manual activation
 
 class OrganizationActivationView(APIView):
-    """API endpoint for activating an Organization via email link."""
     permission_classes = [AllowAny]
 
     def get(self, request, token, *args, **kwargs):
@@ -324,49 +315,15 @@ class OrganizationActivationView(APIView):
 
         return Response({'detail': 'Organization activated successfully.'}, status=status.HTTP_200_OK)
 
-class BuyerCreateView(generics.CreateAPIView):
-    """API endpoint for creating a new Buyer entity within an organization."""
-    queryset = Buyer.objects.all()
-    serializer_class = BuyerSerializer
-    permission_classes = [IsAuthenticated, IsAdminOrManager] # Restricted to authenticated Admins/Managers
-
-    def perform_create(self, serializer):
-        # Automatically associate the buyer with the user's organization
-        serializer.save(organization=self.request.user.organization)
-
-class SupplierCreateView(generics.CreateAPIView):
-    """API endpoint for creating a new Supplier entity within an organization."""
-    queryset = Supplier.objects.all()
-    serializer_class = SupplierSerializer
-    permission_classes = [IsAuthenticated, IsAdminOrManager] # Restricted to authenticated Admins/Managers
-
-    def perform_create(self, serializer):
-        # Automatically associate the supplier with the user's organization
-        serializer.save(organization=self.request.user.organization)
-
-class DriverCreateView(generics.CreateAPIView):
-    """API endpoint for creating a new Driver entity within an organization."""
-    queryset = Driver.objects.all()
-    serializer_class = DriverSerializer
-    permission_classes = [IsAuthenticated, IsAdminOrManager] # Restricted to authenticated Admins/Managers
-
-    def perform_create(self, serializer):
-        # Automatically associate the driver with the user's organization
-        serializer.save(organization=self.request.user.organization)
-
 class OrganizationOnboardingView(generics.CreateAPIView):
-    """API endpoint for creating a new Organization and its initial admin user."""
     serializer_class = OrganizationOnboardingSerializer
-    permission_classes = [AllowAny] # This endpoint should be publicly accessible for sign-up
+    permission_classes = [AllowAny]
 
     def perform_create(self, serializer):
-        # The serializer's create method handles the creation of both organization and user
-        # We just need to call save() which in turn calls the create method of the serializer
         created_objects = serializer.save()
         organization = created_objects['organization']
         user = created_objects['user']
 
-        # Trigger Djoser's user activation email
         if djoser_settings.SEND_ACTIVATION_EMAIL:
              try:
                  djoser_settings.EMAIL.activation(self.request, {"user": user}).send([user.email])
@@ -378,8 +335,78 @@ class OrganizationOnboardingView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
-        # Return a custom response indicating success and that an email was sent
         return Response(
             {"detail": "Organization and initial user created. Please check the user's email for activation."},
             status=status.HTTP_201_CREATED
         )
+
+class OrganizationRelationshipListView(generics.ListAPIView):
+    serializer_class = OrganizationRelationshipSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            return OrganizationRelationship.objects.none()
+
+        queryset = OrganizationRelationship.objects.filter(
+            Q(buyer_organization=organization) | Q(supplier_organization=organization)
+        )
+
+        status = self.request.query_params.get('status')
+        if status in ['pending', 'accepted', 'rejected']:
+            queryset = queryset.filter(status=status)
+
+        return queryset.order_by('-created_at')
+
+class OrganizationRelationshipRequestView(generics.CreateAPIView):
+    serializer_class = OrganizationRelationshipSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrManager]
+
+    def perform_create(self, serializer):
+        serializer.save()
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+class OrganizationRelationshipUpdateView(generics.UpdateAPIView):
+    queryset = OrganizationRelationship.objects.all()
+    serializer_class = OrganizationRelationshipSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrManager]
+    lookup_field = 'pk'
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            return OrganizationRelationship.objects.none()
+
+        queryset = OrganizationRelationship.objects.filter(
+            Q(buyer_organization=organization) | Q(supplier_organization=organization),
+            status='pending'
+        ).exclude(initiated_by__organization=organization)
+
+        return queryset
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+
+        new_status = serializer.validated_data.get('status')
+        if new_status not in ['accepted', 'rejected']:
+             raise serializers.ValidationError({"status": "Status can only be changed to 'accepted' or 'rejected'."})
+
+        self.perform_update(serializer)
+
+        if getattr(instance, '_prefetched_objects_cache', None):
+            instance._prefetched_objects_cache = {}
+
+        return Response(serializer.data)

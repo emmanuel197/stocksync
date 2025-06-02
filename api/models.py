@@ -2,15 +2,13 @@ from django.db import models
 from accounts.models import User, Organization
 from decimal import Decimal
 import random, string
-from accounts.managers import BaseTenantManager  # Import BaseTenantManager
 
 # Create your models here.
 
 
 class Brand(models.Model):
     name = models.CharField(max_length=200)
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='brands')  # Add organization ForeignKey
-    objects = BaseTenantManager()  # Use BaseTenantManager
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='brands')
 
     def __str__(self):
         return self.name
@@ -25,7 +23,7 @@ class Supplier(models.Model):
         ('net_60', 'Net 60 Days'),
         ('custom', 'Custom'),
     ]
-    
+
     name = models.CharField(max_length=200)
     supplier_code = models.CharField(max_length=50, unique=True)
     contact_person = models.CharField(max_length=100, blank=True, null=True)
@@ -39,8 +37,7 @@ class Supplier(models.Model):
     website = models.URLField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    objects = BaseTenantManager()  # Use BaseTenantManager
-    
+
     class Meta:
         indexes = [
             models.Index(fields=['name']),
@@ -48,39 +45,39 @@ class Supplier(models.Model):
             models.Index(fields=['organization']),
             models.Index(fields=['active_status']),
         ]
-        unique_together = ['name', 'organization']
-    
+
     def __str__(self):
         return self.name
-    
+
     def save(self, *args, **kwargs):
         # Generate supplier code if not set
         if not self.supplier_code:
             prefix = 'SUP'
-            last_supplier = Supplier.objects.filter(organization=self.organization).order_by('-id').first()
-            if last_supplier and last_supplier.supplier_code.startswith(prefix):
-                try:
-                    last_number = int(last_supplier.supplier_code[len(prefix):])
-                    self.supplier_code = f"{prefix}{last_number + 1:04d}"
-                except ValueError:
+            if self.organization:
+                last_supplier = Supplier.objects.base_manager.filter(organization=self.organization).order_by('-id').first()
+                if last_supplier and last_supplier.supplier_code.startswith(prefix):
+                    try:
+                        last_number = int(last_supplier.supplier_code[len(prefix):])
+                        self.supplier_code = f"{prefix}{last_number + 1:04d}"
+                    except ValueError:
+                        self.supplier_code = f"{prefix}0001"
+                else:
                     self.supplier_code = f"{prefix}0001"
             else:
                 self.supplier_code = f"{prefix}0001"
-        
+
         super().save(*args, **kwargs)
-    
+
     def get_order_history(self):
         """Get purchase order history from this supplier"""
-        # For future implementation with PurchaseOrder model
         pass
-    
+
     def get_performance_metrics(self):
         """Calculate supplier performance metrics"""
-        # For future implementation (on-time delivery, quality, etc.)
         return {
-            'total_orders': 0,  # Placeholder
-            'on_time_delivery_rate': 0,  # Placeholder
-            'quality_rating': 0,  # Placeholder
+            'total_orders': 0,
+            'on_time_delivery_rate': 0,
+            'quality_rating': 0,
         }
 
 
@@ -92,7 +89,7 @@ class Buyer(models.Model):
         ('net_30', 'Net 30 Days'),
         ('custom', 'Custom'),
     ]
-    
+
     name = models.CharField(max_length=200)
     buyer_code = models.CharField(max_length=50, unique=True)
     contact_person = models.CharField(max_length=100, blank=True, null=True)
@@ -106,8 +103,7 @@ class Buyer(models.Model):
     active_status = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    objects = BaseTenantManager()  # Use BaseTenantManager
-    
+
     class Meta:
         indexes = [
             models.Index(fields=['name']),
@@ -115,39 +111,40 @@ class Buyer(models.Model):
             models.Index(fields=['organization']),
             models.Index(fields=['active_status']),
         ]
-        unique_together = ['name', 'organization']
-    
+
     def __str__(self):
         return self.name
-    
+
     def save(self, *args, **kwargs):
         # Generate buyer code if not set
         if not self.buyer_code:
             prefix = 'BUY'
-            last_buyer = Buyer.objects.filter(organization=self.organization).order_by('-id').first()
-            if last_buyer and last_buyer.buyer_code.startswith(prefix):
-                try:
-                    last_number = int(last_buyer.buyer_code[len(prefix):])
-                    self.buyer_code = f"{prefix}{last_number + 1:04d}"
-                except ValueError:
+            if self.organization:
+                last_buyer = Buyer.objects.base_manager.filter(organization=self.organization).order_by('-id').first()
+                if last_buyer and last_buyer.buyer_code.startswith(prefix):
+                    try:
+                        last_number = int(last_buyer.buyer_code[len(prefix):])
+                        self.buyer_code = f"{prefix}{last_number + 1:04d}"
+                    except ValueError:
+                        self.buyer_code = f"{prefix}0001"
+                else:
                     self.buyer_code = f"{prefix}0001"
             else:
                 self.buyer_code = f"{prefix}0001"
-        
+
         super().save(*args, **kwargs)
-    
+
     def get_order_history(self):
         """Get order history from this buyer"""
-        return Order.objects.filter(customer_info__contains={'buyer_id': self.id})
-    
+        return self.orders.all()
+
     def get_current_credit_usage(self):
         """Calculate current credit usage"""
-        unpaid_orders = Order.objects.filter(
-            customer_info__contains={'buyer_id': self.id},
+        unpaid_orders = self.orders.filter(
             payment_status__in=['unpaid', 'partially_paid']
         )
         return sum(order.total_amount for order in unpaid_orders)
-    
+
     def has_available_credit(self, amount):
         """Check if buyer has available credit for an order"""
         current_usage = self.get_current_credit_usage()
@@ -166,8 +163,7 @@ class Driver(models.Model):
     notes = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    objects = BaseTenantManager()  # Use BaseTenantManager
-    
+
     class Meta:
         indexes = [
             models.Index(fields=['name']),
@@ -175,13 +171,12 @@ class Driver(models.Model):
             models.Index(fields=['organization']),
             models.Index(fields=['active_status']),
         ]
-    
+
     def __str__(self):
         return self.name
-    
+
     def get_delivery_history(self):
         """Get delivery history for this driver"""
-        # For future implementation with Delivery model
         pass
 
 
@@ -192,7 +187,6 @@ class Category(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='categories')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    objects = BaseTenantManager()  # Use BaseTenantManager
 
     class Meta:
         verbose_name_plural = 'Categories'
@@ -221,7 +215,6 @@ class Product(models.Model):
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    objects = BaseTenantManager()  # Use BaseTenantManager
 
     class Meta:
         indexes = [
@@ -284,7 +277,6 @@ class Location(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    objects = BaseTenantManager()  # Use BaseTenantManager
 
     class Meta:
         indexes = [
@@ -305,7 +297,6 @@ class Inventory(models.Model):
     max_stock_level = models.IntegerField(default=100, help_text="Maximum stock level")
     last_updated = models.DateTimeField(auto_now=True)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='inventory_items')
-    objects = BaseTenantManager()  # Use BaseTenantManager
 
     class Meta:
         verbose_name_plural = 'Inventory Items'
@@ -339,7 +330,6 @@ class Inventory(models.Model):
         """Add stock to inventory"""
         self.quantity += amount
         self.save()
-        # Record inventory movement
         InventoryMovement.objects.create(
             inventory=self,
             quantity_change=amount,
@@ -353,7 +343,6 @@ class Inventory(models.Model):
         if self.quantity >= amount:
             self.quantity -= amount
             self.save()
-            # Record inventory movement
             InventoryMovement.objects.create(
                 inventory=self,
                 quantity_change=-amount,
@@ -380,7 +369,6 @@ class InventoryMovement(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
-    objects = BaseTenantManager()  # Use BaseTenantManager
 
     class Meta:
         indexes = [
@@ -412,17 +400,17 @@ class Order(models.Model):
         ('canceled', 'Canceled'),
         ('returned', 'Returned'),
     ]
-    
+
     PAYMENT_STATUS_CHOICES = [
         ('unpaid', 'Unpaid'),
         ('partially_paid', 'Partially Paid'),
         ('paid', 'Paid'),
         ('refunded', 'Refunded'),
     ]
-    
+
     order_number = models.CharField(max_length=20, unique=True)
     order_date = models.DateTimeField(auto_now_add=True)
-    customer = models.ForeignKey(Buyer, on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')  # Update ForeignKey to Buyer
+    customer = models.ForeignKey(Buyer, on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='unpaid')
@@ -432,8 +420,7 @@ class Order(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='orders')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_orders')
     updated_at = models.DateTimeField(auto_now=True)
-    objects = BaseTenantManager()  # Use BaseTenantManager
-    
+
     class Meta:
         indexes = [
             models.Index(fields=['order_number']),
@@ -442,12 +429,11 @@ class Order(models.Model):
             models.Index(fields=['organization']),
             models.Index(fields=['payment_status']),
         ]
-    
+
     def __str__(self):
         return self.order_number
-    
+
     def save(self, *args, **kwargs):
-        # Generate order number if not set
         if not self.order_number:
             prefix = 'ORD'
             last_order = Order.objects.filter(organization=self.organization).order_by('-id').first()
@@ -459,25 +445,20 @@ class Order(models.Model):
                     self.order_number = f"{prefix}000001"
             else:
                 self.order_number = f"{prefix}000001"
-        
-        # Calculate total amount from order items
-        if not self.id:  # Only for new orders
-            super().save(*args, **kwargs)  # Save first to create ID
+
+        if not self.id:
+            super().save(*args, **kwargs)
         else:
-            # Update total from order items
             self.total_amount = sum(item.subtotal for item in self.items.all())
             super().save(*args, **kwargs)
-    
+
     def calculate_total(self):
-        """Calculate order total from order items"""
         return sum(item.subtotal for item in self.items.all())
-    
+
     def update_inventory(self, add_to_inventory=False):
-        """Update inventory based on order status changes"""
         for item in self.items.all():
             product = item.product
             try:
-                # Find inventory at default location
                 default_location = Location.objects.filter(organization=self.organization).first()
                 if default_location:
                     inventory, created = Inventory.objects.get_or_create(
@@ -486,19 +467,18 @@ class Order(models.Model):
                         organization=self.organization,
                         defaults={'quantity': 0}
                     )
-                    
+
                     if add_to_inventory:
                         inventory.add_stock(
-                            item.quantity, 
+                            item.quantity,
                             f"Order {self.order_number} canceled/returned"
                         )
                     else:
                         inventory.remove_stock(
-                            item.quantity, 
+                            item.quantity,
                             f"Order {self.order_number}"
                         )
             except Exception as e:
-                # Log error but don't stop the process
                 print(f"Error updating inventory for order {self.order_number}: {e}")
 
 
@@ -509,35 +489,31 @@ class OrderItem(models.Model):
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     subtotal = models.DecimalField(max_digits=10, decimal_places=2)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
-    objects = BaseTenantManager()  # Use BaseTenantManager
-    
+
     class Meta:
         indexes = [
             models.Index(fields=['order']),
             models.Index(fields=['product']),
             models.Index(fields=['organization']),
         ]
-    
+
     def __str__(self):
         return f"{self.quantity} x {self.product.name} in Order {self.order.order_number}"
-    
+
     def save(self, *args, **kwargs):
-        # Calculate subtotal
         self.subtotal = self.quantity * self.unit_price
-        
-        # Ensure organization matches order's organization
+
         if self.order and not self.organization_id:
             self.organization = self.order.organization
-        
+
         super().save(*args, **kwargs)
-        
-        # Update order total
+
         self.order.total_amount = self.order.calculate_total()
         self.order.save()
 
 
 class ShippingAddress(models.Model):
-    customer = models.ForeignKey(Buyer, on_delete=models.CASCADE)  # Update ForeignKey to Buyer
+    customer = models.ForeignKey(Buyer, on_delete=models.CASCADE)
     order = models.ForeignKey(Order, on_delete=models.CASCADE)
     address = models.CharField(max_length=200)
     city = models.CharField(max_length=200)
@@ -557,7 +533,7 @@ class Notification(models.Model):
         ('order', 'Order Update'),
         ('system', 'System Message'),
     ]
-    
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
     message = models.TextField()
     notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES, default='info')
@@ -566,8 +542,7 @@ class Notification(models.Model):
     related_object_type = models.CharField(max_length=50, blank=True, null=True, help_text="Type of related object (e.g., 'order', 'product')")
     related_object_id = models.PositiveIntegerField(blank=True, null=True, help_text="ID of related object")
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='notifications')
-    objects = BaseTenantManager()  # Use BaseTenantManager
-    
+
     class Meta:
         indexes = [
             models.Index(fields=['user']),
@@ -576,26 +551,22 @@ class Notification(models.Model):
             models.Index(fields=['timestamp']),
             models.Index(fields=['organization']),
         ]
-        ordering = ['timestamp']  # Changed ordering to ascending for notifications
-    
+        ordering = ['timestamp']
+
     def __str__(self):
         return f"{self.get_notification_type_display()} for {self.user.email}: {self.message[:50]}"
-    
+
     def mark_as_read(self):
-        """Mark notification as read"""
         self.read_status = True
         self.save()
-    
+
     @classmethod
     def get_unread_count(cls, user):
-        """Get count of unread notifications for a user"""
         return cls.objects.filter(user=user, read_status=False).count()
-    
+
     @classmethod
     def create_low_stock_notification(cls, inventory, user=None):
-        """Create a low stock notification"""
         if not user:
-            # Notify all admin and manager users if no specific user provided
             users = User.objects.filter(
                 organization=inventory.organization,
                 role__in=['admin', 'manager'],
@@ -603,10 +574,10 @@ class Notification(models.Model):
             )
         else:
             users = [user]
-        
+
         notifications = []
         message = f"Low stock alert: {inventory.product.name} at {inventory.location.name} is below minimum level. Current: {inventory.quantity}, Minimum: {inventory.min_stock_level}"
-        
+
         for user in users:
             notification = cls.objects.create(
                 user=user,
@@ -617,7 +588,7 @@ class Notification(models.Model):
                 organization=inventory.organization
             )
             notifications.append(notification)
-        
+
         return notifications
 
 
@@ -631,8 +602,7 @@ class Communication(models.Model):
     related_object_type = models.CharField(max_length=50, blank=True, null=True)
     related_object_id = models.PositiveIntegerField(blank=True, null=True)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='communications')
-    objects = BaseTenantManager()  # Use BaseTenantManager
-    
+
     class Meta:
         indexes = [
             models.Index(fields=['sender']),
@@ -641,18 +611,16 @@ class Communication(models.Model):
             models.Index(fields=['read_status']),
             models.Index(fields=['organization']),
         ]
-        ordering = ['timestamp']  # Changed ordering to ascending for communications
-    
+        ordering = ['timestamp']
+
     def __str__(self):
         return f"From {self.sender.email} to {self.recipient.email}: {self.message[:50]}"
-    
+
     def mark_as_read(self):
-        """Mark communication as read"""
         self.read_status = True
         self.save()
-    
+
     @classmethod
     def get_unread_count(cls, user):
-        """Get count of unread communications for a user"""
         return cls.objects.filter(recipient=user, read_status=False).count()
 
