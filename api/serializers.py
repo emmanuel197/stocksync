@@ -2,6 +2,7 @@ from rest_framework import serializers
 from .models import Product, Order, ProductImage, Size, ProductSize, Brand, OrderItem, ShippingAddress, Buyer, Supplier, Driver, Category, Location, Inventory, InventoryMovement
 from accounts.models import Organization, User, OrganizationRelationship
 from django.db import transaction
+from django.db.models import Sum
 
 class ProductImageSerializer(serializers.ModelSerializer):
     class Meta:
@@ -25,10 +26,11 @@ class ProductSerializer(serializers.ModelSerializer):
     sizes = ProductSizeSerializer(many=True, read_only=True)
     brand = serializers.SerializerMethodField()
     total_completed_orders = serializers.SerializerMethodField()
+    is_available = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
-        fields = ('id', 'name', 'price', 'discount_price', 'brand', 'image', 'description', 'images', 'sizes', 'total_completed_orders')
+        fields = ('id', 'name', 'price', 'discount_price', 'brand', 'image', 'description', 'images', 'sizes', 'total_completed_orders', 'is_available')
 
     def get_brand(self, obj):
         return obj.brand.name if obj.brand else None  
@@ -36,11 +38,41 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_total_completed_orders(self, obj):
         return obj.get_completed
 
+    def get_is_available(self, obj):
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            user_organization = request.user.organization
+
+            if user_organization and user_organization.organization_type in ['buyer', 'both']:
+                accepted_supplier_ids = OrganizationRelationship.objects.filter(
+                    buyer_organization=user_organization,
+                    status='accepted'
+                ).values_list('supplier_organization__id', flat=True)
+
+                total_inventory = Inventory.objects.filter(
+                    product=obj,
+                    location__organization__id__in=accepted_supplier_ids
+                ).aggregate(total_quantity=Sum('quantity'))['total_quantity']
+
+                return total_inventory is not None and total_inventory > 0
+
+            if user_organization and obj.organization == user_organization:
+                return True
+
+        return False
+
 class OrganizationSerializer(serializers.ModelSerializer):
+    """Serializer for the Organization model."""
     class Meta:
         model = Organization
-        fields = '__all__'
-        read_only_fields = ('active_status', 'email_sent', 'created_at', 'updated_at')
+        fields = [
+            'id', 'name', 'logo', 'address', 'contact_email',
+            'contact_phone', 'subscription_plan', 'organization_type',
+            'active_status', 'created_at', 'updated_at'
+        ]
+        read_only_fields = [
+            'subscription_plan', 'active_status', 'created_at', 'updated_at'
+        ]
 
 class OrganizationOnboardingSerializer(serializers.Serializer):
     # Organization fields
@@ -125,7 +157,7 @@ class OrganizationRelationshipSerializer(serializers.ModelSerializer):
             'id', 'buyer_organization', 'supplier_organization', 'status',
             'initiated_by', 'created_at', 'updated_at', 'target_organization_id'
         ]
-        read_only_fields = ['status', 'initiated_by', 'created_at', 'updated_at']
+        read_only_fields = ['initiated_by', 'created_at', 'updated_at']
 
     def create(self, validated_data):
         # This create method will be used for initiating a relationship request
@@ -169,7 +201,19 @@ class OrganizationRelationshipSerializer(serializers.ModelSerializer):
             instance.save(update_fields=['status', 'updated_at'])
             return instance
         else:
-            raise serializers.ValidationError("Only the 'status' field can be updated.")
+            pass
+
+        return instance
+
+# Add a serializer for listing potential suppliers
+class PotentialSupplierSerializer(serializers.ModelSerializer):
+    """Serializer for listing potential supplier organizations."""
+    class Meta:
+        model = Organization
+        fields = [
+            'id', 'name', 'logo', 'address', 'contact_email',
+            'contact_phone', 'organization_type'
+        ]
 
 class BuyerSerializer(serializers.ModelSerializer):
     # Add fields for the associated user
@@ -227,3 +271,49 @@ class DriverSerializer(serializers.ModelSerializer):
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("A user with that email already exists.")
         return value
+
+class InventorySerializer(serializers.ModelSerializer):
+    product = ProductSerializer(read_only=True) # Include product details
+    location = serializers.SlugRelatedField(slug_field='name', read_only=True) # Show location name
+
+    class Meta:
+        model = Inventory
+        fields = [
+            'id', 'product', 'location', 'quantity', 'last_stocked',
+            'last_sold', 'created_at', 'updated_at'
+        ]
+        read_only_fields = [
+            'last_stocked', 'last_sold', 'created_at', 'updated_at'
+        ]
+
+    def __init__(self, *args, **kwargs):
+        request = kwargs.get('context', {}).get('request')
+        super().__init__(*args, **kwargs)
+
+        if request and request.user and request.user.is_authenticated:
+            user_organization = request.user.organization
+            if user_organization and user_organization.organization_type in ['buyer', 'both']:
+                self.fields.pop('quantity', None)
+        elif request and (not request.user or not request.user.is_authenticated or not request.user.organization):
+            self.fields.pop('quantity', None)
+
+class InventoryMovementSerializer(serializers.ModelSerializer):
+    inventory = InventorySerializer(read_only=True, context={'request': None})
+    moved_by = serializers.SlugRelatedField(slug_field='email', read_only=True)
+
+    class Meta:
+        model = InventoryMovement
+        fields = [
+            'id', 'inventory', 'movement_type', 'quantity_changed',
+            'timestamp', 'moved_by'
+        ]
+        read_only_fields = [
+            'timestamp', 'moved_by'
+        ]
+
+    def __init__(self, *args, **kwargs):
+        request = kwargs.get('context', {}).get('request')
+        super().__init__(*args, **kwargs)
+
+        if 'inventory' in self.fields:
+            self.fields['inventory'].context['request'] = request

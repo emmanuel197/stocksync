@@ -15,4 +15,8 @@ urlpatterns = [
     path('relationships/', OrganizationRelationshipListView.as_view(), name='relationship-list'),
     path('relationships/request/', OrganizationRelationshipRequestView.as_view(), name='relationship-request'),
     path('relationships/<int:pk>/update/', OrganizationRelationshipUpdateView.as_view(), name='relationship-update'),
+    path('potential-suppliers/', PotentialSupplierListView.as_view(), name='potential-supplier-list'),
+    path('inventory/', InventoryListView.as_view(), name='inventory-list'),
+    path('inventory/<int:pk>/', InventoryDetailView.as_view(), name='inventory-detail'),
+    path('inventory-movements/', InventoryMovementListView.as_view(), name='inventory-movement-list'),
 ]

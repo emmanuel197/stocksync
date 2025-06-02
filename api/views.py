@@ -1,32 +1,32 @@
 from django.shortcuts import get_object_or_404
 from .serializers import (
     ProductSerializer, OrganizationSerializer, BuyerSerializer, SupplierSerializer, DriverSerializer, 
-    OrganizationOnboardingSerializer, OrganizationRelationshipSerializer
+    OrganizationOnboardingSerializer, OrganizationRelationshipSerializer, PotentialSupplierSerializer,
+    InventorySerializer, InventoryMovementSerializer
 )
 from .models import (
     Product, Order, OrderItem, ShippingAddress, ProductImage, ProductSize, Buyer, Brand, Supplier, Driver, 
     Category, Location, Inventory, InventoryMovement
 )
-from accounts.models import Organization, OrganizationRelationship
+from accounts.models import Organization, OrganizationRelationship, User
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import generics, status
+from rest_framework import generics, status, serializers
+
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.authentication import JWTAuthentication
 import json
-from django.db.models import Q
+from django.db.models import Q, Prefetch
 from .filters import ProductFilter
 from django_filters.rest_framework import DjangoFilterBackend
 from django.core.mail import EmailMessage, send_mail
 from django.template.loader import render_to_string
 from django.conf import settings
 from django.utils import timezone
-from django.db.models import Prefetch
 from django.urls import reverse
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from accounts.permissions import IsBuyer, IsAdminOrManager, IsStaff
-from accounts.models import Organization, User
 from djoser.conf import settings as djoser_settings
 from django.db import transaction
 
@@ -410,3 +410,140 @@ class OrganizationRelationshipUpdateView(generics.UpdateAPIView):
             instance._prefetched_objects_cache = {}
 
         return Response(serializer.data)
+
+class PotentialSupplierListView(generics.ListAPIView):
+    """
+    API endpoint to list organizations that can act as suppliers.
+    Accessible to authenticated users from buyer or 'both' organizations.
+    """
+    serializer_class = PotentialSupplierSerializer
+    permission_classes = [IsAuthenticated] # Only authenticated users can see this list
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            return Organization.objects.none() # User not associated with an organization
+
+        # Only allow users from buyer or 'both' organizations to see potential suppliers
+        if organization.organization_type not in ['buyer', 'both']:
+            return Organization.objects.none()
+
+        # Filter organizations that are suppliers or 'both'
+        queryset = Organization.objects.filter(organization_type__in=['supplier', 'both'])
+
+        # Exclude the user's own organization from the list
+        queryset = queryset.exclude(id=organization.id)
+
+        return queryset.order_by('name')
+
+class InventoryListView(generics.ListAPIView):
+    """
+    List inventory items available to the authenticated user's organization
+    based on accepted supplier relationships (for buyers) or their own inventory (for suppliers).
+    """
+    serializer_class = InventorySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            return Inventory.objects.none()
+
+        # Prefetch related product and location for efficiency
+        queryset = Inventory.objects.select_related('product', 'location')
+
+        # If the user's organization is a Buyer (or both), they should see inventory
+        # from products belonging to organizations they have an 'accepted' supplier relationship with.
+        if organization.organization_type in ['buyer', 'both']:
+            accepted_supplier_ids = OrganizationRelationship.objects.filter(
+                buyer_organization=organization,
+                status='accepted'
+            ).values_list('supplier_organization__id', flat=True)
+
+            # Filter inventory where the related product's organization is in the accepted supplier IDs
+            queryset = queryset.filter(product__organization__id__in=accepted_supplier_ids)
+
+        # If the user's organization is a Supplier (or both), they should see their own inventory.
+        elif organization.organization_type in ['supplier', 'internal']:
+             # Filter inventory where the related product's organization is the current organization
+             queryset = queryset.filter(product__organization=organization)
+
+        else:
+            # Other organization types might have different access rules
+            queryset = Inventory.objects.none()
+
+        return queryset.order_by('product__name', 'location__name')
+
+
+class InventoryDetailView(generics.RetrieveAPIView):
+    """
+    Retrieve a specific inventory item, ensuring the user's organization
+    has access based on relationships.
+    """
+    serializer_class = InventorySerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'pk'
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            return Inventory.objects.none()
+
+        # Prefetch related product and location
+        queryset = Inventory.objects.select_related('product', 'location')
+
+        if organization.organization_type in ['buyer', 'both']:
+            accepted_supplier_ids = OrganizationRelationship.objects.filter(
+                buyer_organization=organization,
+                status='accepted'
+            ).values_list('supplier_organization__id', flat=True)
+            queryset = queryset.filter(product__organization__id__in=accepted_supplier_ids)
+
+        elif organization.organization_type in ['supplier', 'internal']:
+             queryset = queryset.filter(product__organization=organization)
+
+        else:
+            queryset = Inventory.objects.none()
+
+        return queryset
+
+
+class InventoryMovementListView(generics.ListAPIView):
+    """
+    List inventory movements for inventory items accessible to the
+    authenticated user's organization.
+    """
+    serializer_class = InventoryMovementSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            return InventoryMovement.objects.none()
+
+        # Prefetch related inventory, product, and user
+        queryset = InventoryMovement.objects.select_related('inventory__product', 'moved_by')
+
+        # Filter movements based on the accessibility of the related inventory item
+        if organization.organization_type in ['buyer', 'both']:
+            accepted_supplier_ids = OrganizationRelationship.objects.filter(
+                buyer_organization=organization,
+                status='accepted'
+            ).values_list('supplier_organization__id', flat=True)
+            queryset = queryset.filter(inventory__product__organization__id__in=accepted_supplier_ids)
+
+        elif organization.organization_type in ['supplier', 'internal']:
+             queryset = queryset.filter(inventory__product__organization=organization)
+
+        else:
+            queryset = InventoryMovement.objects.none()
+
+        return queryset.order_by('-timestamp')
