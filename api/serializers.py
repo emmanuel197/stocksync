@@ -253,31 +253,66 @@ class DriverSerializer(serializers.ModelSerializer):
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("A user with that email already exists.")
         return value
+# ...existing serializers...
+
+class LocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Location
+        fields = ['id', 'name', 'address', 'description', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at']
+
+    def validate(self, data):
+        request = self.context.get('request')
+        user_organization = request.user.organization
+        name = data.get('name')
+
+        queryset = Location.objects.filter(name=name, organization=user_organization)
+
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError({"name": "A location with this name already exists in your organization."})
+
+        return data
+
+
 
 class InventorySerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
-    location = serializers.SlugRelatedField(slug_field='name', read_only=True)
+    location = LocationSerializer(read_only=True)
 
     class Meta:
         model = Inventory
         fields = [
-            'id', 'product', 'location', 'quantity', 'last_stocked',
-            'last_sold', 'created_at', 'updated_at'
+            'id', 'product', 'location', 'quantity', 'last_stocked', 'last_sold',
+            'created_at', 'updated_at', 'organization'
         ]
-        read_only_fields = [
-            'last_stocked', 'last_sold', 'created_at', 'updated_at'
+        read_only_fields = ['last_stocked', 'last_sold', 'created_at', 'updated_at', 'organization']
+
+class BuyerSupplierInventorySerializer(serializers.ModelSerializer):
+    """
+    Serializer for buyers viewing supplier inventory.
+    Hides the exact quantity, only indicates availability.
+    """
+    product = ProductSerializer(read_only=True)
+    location = LocationSerializer(read_only=True)
+    # Add a field to indicate availability without showing quantity
+    is_available = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Inventory
+        fields = [
+            'id', 'product', 'location', 'is_available', 'last_stocked',
+            'created_at', 'updated_at', 'organization'
         ]
+        read_only_fields = ['last_stocked', 'created_at', 'updated_at', 'organization']
 
-    def __init__(self, *args, **kwargs):
-        request = kwargs.get('context', {}).get('request')
-        super().__init__(*args, **kwargs)
-
-        if request and request.user and request.user.is_authenticated:
-            user_organization = request.user.organization
-            if user_organization and user_organization.organization_type in ['buyer', 'both']:
-                self.fields.pop('quantity', None)
-        elif request and (not request.user or not request.user.is_authenticated or not request.user.organization):
-            self.fields.pop('quantity', None)
+    def get_is_available(self, obj):
+        """
+        Returns True if quantity is greater than 0, False otherwise.
+        """
+        return obj.quantity > 0
 
 class InventoryCreateSerializer(serializers.ModelSerializer):
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())

@@ -2,7 +2,7 @@ from django.urls import path
 from .views import *
 app_name = 'api'
 urlpatterns = [
-    path('products', ProductAPIView.as_view()),
+    path('products/', ProductAPIView.as_view()),
     path('create-order/', CreateOrUpdateOrderView.as_view()),
     path('cart-data/', CartDataView.as_view()),
     path('update-cart/', updateCartView.as_view()),

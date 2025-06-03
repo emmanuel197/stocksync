@@ -3,7 +3,7 @@ from .serializers import (
     ProductSerializer, OrganizationSerializer, BuyerSerializer, SupplierSerializer, DriverSerializer, 
     OrganizationOnboardingSerializer, OrganizationRelationshipSerializer, PotentialSupplierSerializer,
     InventorySerializer, InventoryMovementSerializer, ProductCreateSerializer, InventoryCreateSerializer,
-    BrandSerializer, CategorySerializer, LocationSerializer
+    BrandSerializer, CategorySerializer, LocationSerializer, BuyerSupplierInventorySerializer
 )
 from .models import (
     Product, Order, OrderItem, ShippingAddress, ProductImage, ProductSize, Buyer, Brand, Supplier, Driver, 
@@ -88,7 +88,7 @@ def get_item_list(items):
             'id': item.product.id,
             'product': item.product.name,
             'price': item.product.price,
-            'image': item.product.image.url,
+            'image': item.product.image.url if item.product.image else None, # Handle potential missing image
             'quantity': item.quantity,
             'total': item.get_total,
             'total_completed_orders': item.product.get_completed,
@@ -104,10 +104,10 @@ class CreateOrUpdateOrderView(APIView):
         data = request.data
         product_id = data.get('product_id')
         product = get_object_or_404(Product, id=product_id)
-        buyer, created = Buyer.objects.get_or_create(user=request.user, first_name=request.user.first_name, last_name=request.user.last_name, email=request.user.email)
+        buyer, created = Buyer.objects.get_or_create(user=request.user, defaults={'first_name': request.user.first_name, 'last_name': request.user.last_name, 'email': request.user.email}) # Use defaults for get_or_create
         order, created = Order.objects.get_or_create(customer=buyer, complete=False)
         order_item, created = OrderItem.objects.get_or_create(
-            order=order, 
+            order=order,
             product=product,
             defaults={'quantity': 1}
         )
@@ -115,13 +115,15 @@ class CreateOrUpdateOrderView(APIView):
         if not created:
             order_item.quantity += 1
             order_item.save()
-        
+
+        # Fetch the updated order item with related product
         updated_order_item = OrderItem.objects.select_related('product').get(id=order_item.id)
+
         item_data = {
             'id': updated_order_item.product.id,
             'product': updated_order_item.product.name,
             'price': updated_order_item.product.price,
-            'image': updated_order_item.product.image.url,
+            'image': updated_order_item.product.image.url if updated_order_item.product.image else None, # Handle potential missing image
             'quantity': updated_order_item.quantity,
             'total': updated_order_item.get_total,
             'total_completed_orders': updated_order_item.product.get_completed,
@@ -136,12 +138,13 @@ class CartDataView(APIView):
     authentication_classes = [JWTAuthentication]
 
     def get(self, request, *args, **kwargs):
-        buyer, created = Buyer.objects.get_or_create(user=request.user, first_name=request.user.first_name, last_name=request.user.last_name, email=request.user.email)
+        buyer, created = Buyer.objects.get_or_create(user=request.user, defaults={'first_name': request.user.first_name, 'last_name': request.user.last_name, 'email': request.user.email}) # Use defaults for get_or_create
         order, order_created = Order.objects.get_or_create(customer=buyer, complete=False)
         items = order.orderitem_set.all()
-        
-        if len(items) == 0:
-            return Response({"QUERY ERROR: No Such Order Item Exists"}, status=status.HTTP_404_NOT_FOUND)
+
+        if not items.exists(): # Check if items exist using .exists()
+            return Response({"message": "No items in the cart."}, status=status.HTTP_200_OK) # Return 200 with empty items
+
         item_list = get_item_list(items)
 
         cart_data = {
@@ -157,13 +160,13 @@ class CartDataView(APIView):
 class updateCartView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsBuyer]
-    
+
     def post(self, request, format=None):
         data = request.data
         product_id = data.get('product_id')
         action = data.get('action')
-        product = Product.objects.get(id=product_id)
-        buyer, created = Buyer.objects.get_or_create(user=request.user, first_name=request.user.first_name, last_name=request.user.last_name, email=request.user.email)
+        product = get_object_or_404(Product, id=product_id) # Use get_object_or_404
+        buyer, created = Buyer.objects.get_or_create(user=request.user, defaults={'first_name': request.user.first_name, 'last_name': request.user.last_name, 'email': request.user.email}) # Use defaults for get_or_create
         order, order_created  = Order.objects.get_or_create(customer=buyer, complete=False)
         order_item, order_item_created = OrderItem.objects.get_or_create(order=order, product=product)
 
@@ -176,13 +179,18 @@ class updateCartView(APIView):
                 order_item.delete()
             else:
                 order_item.save()
+
+        # Re-fetch the order to get updated totals after item changes
+        order.refresh_from_db()
+
+        # Try to get the updated order item, handle deletion
         try:
             updated_order_item = OrderItem.objects.select_related('product').get(id=order_item.id)
             item_data = {
                 'id': updated_order_item.product.id,
                 'product': updated_order_item.product.name,
                 'price': updated_order_item.product.price,
-                'image': updated_order_item.product.image.url,
+                'image': updated_order_item.product.image.url if updated_order_item.product.image else None, # Handle potential missing image
                 'quantity': updated_order_item.quantity,
                 'total': updated_order_item.get_total,
                 'total_completed_orders': updated_order_item.product.get_completed,
@@ -191,17 +199,19 @@ class updateCartView(APIView):
                 'total_cost': order.get_cart_total,
                 'updated_item': item_data}, status=status.HTTP_200_OK)
         except OrderItem.DoesNotExist:
-            return Response({'item_id': product_id, 'total_items': order.get_cart_items,
-                'total_cost': order.get_cart_total, 'error': 'Item does not exist'}, status=status.HTTP_200_OK)
+            # If the item was deleted, return a response indicating that
+            return Response({'message': 'Item removed from cart', 'item_id': product_id, 'total_items': order.get_cart_items,
+                'total_cost': order.get_cart_total}, status=status.HTTP_200_OK)
+
 
 def send_purchase_confirmation_email(user_email, first_name, order, total):
     shipping_address = None
     if order.shipping:
         shipping_address = order.shippingaddress_set.all().first()
-     
+
     template = render_to_string('api/email_template.html', {'order': order,
                                                             'orderitems': order.orderitem_set.all(),
-                                                        "first_name": first_name, 
+                                                        "first_name": first_name,
                                                         "total": total,
                                                         'shipping_address': shipping_address
                                                         })
@@ -215,22 +225,118 @@ def send_purchase_confirmation_email(user_email, first_name, order, total):
     email.send()
 
 class ProcessOrderView(APIView):
-    permission_classes = [IsAuthenticated, IsAdminOrManager | IsStaff]
+    # Allow IsBuyer OR IsAdminOrManager | IsStaff to process orders
+    permission_classes = [IsAuthenticated, IsBuyer | IsAdminOrManager | IsStaff]
     authentication_classes = [JWTAuthentication]
 
-    def post(self, request, format=None):         
+    def post(self, request, format=None):
         user_info = request.data.get('user_info')
         shipping_info = request.data.get('shipping_info')
         total = request.data.get('total')
-        
-        buyer = request.user.buyer
-        order, created = Order.objects.get_or_create(customer=buyer, complete=False)
 
-        if total == float(order.get_cart_total):
-            order.complete = True
-            order.date_completed = timezone.now()
-            order.save()
-    
+        user = request.user
+        organization = user.organization
+
+        if not organization:
+             return Response({"detail": "User is not associated with an organization."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Ensure the user is authorized to process orders for this organization type
+        if organization.organization_type not in ['buyer', 'supplier', 'both', 'internal']:
+             return Response({"detail": "Your organization type is not authorized to process orders."}, status=status.HTTP_403_FORBIDDEN)
+
+        # If the user is a buyer, they process their own orders
+        if organization.organization_type == 'buyer':
+             buyer, created = Buyer.objects.get_or_create(user=user, defaults={'first_name': user.first_name, 'last_name': user.last_name, 'email': user.email})
+             order, created = Order.objects.get_or_create(customer=buyer, complete=False)
+        # If the user is a supplier/internal/both, they might be processing an order placed by a buyer
+        # This part of the logic would need to be more complex to identify which order is being processed.
+        # For simplicity in this example, we'll assume the request includes the order ID if not a buyer.
+        # However, the prompt focuses on the buyer's perspective completing *their* purchase.
+        # So, we'll primarily focus on the buyer completing their own order.
+        elif organization.organization_type in ['supplier', 'both', 'internal']:
+             # This view is primarily for the buyer completing their own order.
+             # Processing orders initiated by buyers from the supplier side would require a different view/logic.
+             return Response({"detail": "This endpoint is primarily for buyers to complete their own orders."}, status=status.HTTP_403_FORBIDDEN)
+
+
+        # Use a transaction to ensure atomicity of inventory updates
+        with transaction.atomic():
+            if float(total) == float(order.get_cart_total): # Compare floats carefully
+                order.complete = True
+                order.date_completed = timezone.now()
+                order.save()
+
+                # Process each order item for inventory updates
+                for order_item in order.orderitem_set.all():
+                    product = order_item.product
+                    quantity_purchased = order_item.quantity
+
+                    # --- Supplier Inventory Update ---
+                    # Find the supplier's inventory item for this product.
+                    # This assumes the product belongs to a supplier organization.
+                    supplier_organization = product.organization
+                    if supplier_organization and supplier_organization.organization_type in ['supplier', 'both']:
+                        # Find an inventory item for this product at the supplier's organization.
+                        # This might need refinement based on how suppliers manage locations.
+                        # For simplicity, we'll try to find any inventory item for the product at the supplier's org.
+                        supplier_inventory_item = Inventory.objects.filter(
+                            product=product,
+                            organization=supplier_organization
+                        ).first() # Get the first one found
+
+                        if supplier_inventory_item:
+                            # Decrease supplier's inventory
+                            supplier_inventory_item.quantity -= quantity_purchased
+                            supplier_inventory_item.last_sold = timezone.now()
+                            supplier_inventory_item.save()
+
+                            # Create supplier inventory movement (subtraction/sale)
+                            InventoryMovement.objects.create(
+                                inventory=supplier_inventory_item,
+                                movement_type='sale',
+                                quantity_change=-quantity_purchased, # Negative for subtraction
+                                user=user, # User who processed the order (the buyer in this flow)
+                                organization=supplier_organization, # The supplier's organization
+                                note=f"Sale to {organization.name} (Order {order.id})"
+                            )
+                        else:
+                            # Handle case where supplier inventory item is not found (e.g., log a warning)
+                            print(f"Warning: Supplier inventory item not found for product {product.sku} at organization {supplier_organization.name}")
+
+
+                    # --- Buyer Inventory Update ---
+                    # Find or create the buyer's inventory item for this product.
+                    # This assumes the buyer has a default receiving location or similar logic.
+                    # For simplicity, we'll try to find any inventory item for the product at the buyer's organization.
+                    # If none exists, we'll create one.
+                    buyer_inventory_item, created = Inventory.objects.get_or_create(
+                        product=product,
+                        organization=organization, # The buyer's organization
+                        # You might need to specify a default location here or add logic to determine it
+                        # location=buyer_default_location, # Example
+                        defaults={'quantity': 0} # Start with 0 if creating
+                    )
+
+                    # Increase buyer's inventory
+                    buyer_inventory_item.quantity += quantity_purchased
+                    # You might want to set a 'last_received' field here
+                    buyer_inventory_item.save()
+
+                    # Create buyer inventory movement (addition/purchase)
+                    InventoryMovement.objects.create(
+                        inventory=buyer_inventory_item,
+                        movement_type='purchase',
+                        quantity_change=quantity_purchased, # Positive for addition
+                        user=user, # User who processed the order (the buyer)
+                        organization=organization, # The buyer's organization
+                        note=f"Purchase from {supplier_organization.name} (Order {order.id})"
+                    )
+
+            else:
+                # Handle total mismatch (potential fraud or calculation error)
+                return Response({"detail": "Total mismatch. Order not processed."}, status=status.HTTP_400_BAD_REQUEST)
+
+
         if order.shipping == True:
             ShippingAddress.objects.create(
             customer=buyer,
@@ -266,7 +372,7 @@ class UnAuthProcessOrderView(APIView):
                 defaults={'quantity': cart[i]['quantity']}
             )
         
-        if round(total, 2) == float(order.get_cart_total):
+        if round(float(total), 2) == round(float(order.get_cart_total), 2): # Compare floats carefully
             order.complete = True
             order.date_completed = timezone.now()
             order.save()
@@ -282,8 +388,10 @@ class UnAuthProcessOrderView(APIView):
             country=shipping_info['country']
             )
         send_purchase_confirmation_email(email, first_name, order, total)
-        
-        return Response({'order_status': order.complete, 'redirect': '/'}, status=status.HTTP_200_OK)
+
+        response = Response({'order_status': order.complete, 'redirect': '/'}, status=status.HTTP_200_OK)
+        response.delete_cookie('cart') # Clear the cart cookie after successful unauthenticated order
+        return response
 
 def send_organization_activation_email(organization):
     subject = 'Activate Your StockSync Organization'
@@ -541,18 +649,21 @@ class InventoryDetailView(generics.RetrieveAPIView):
 
 class InventoryCreateView(generics.CreateAPIView):
     """
-    Allows users from supplier or 'both' organizations to create new inventory items.
+    Allows users from supplier, 'both', 'internal', or 'buyer' organizations
+    to create new inventory items for their own organization.
     Creates an InventoryMovement record for the initial stock.
     """
     queryset = Inventory.objects.all()
     serializer_class = InventoryCreateSerializer
-    permission_classes = [IsAuthenticated, IsAdminOrManager] # Or a custom permission for inventory managers
+    # Allow IsBuyer OR IsAdminOrManager
+    permission_classes = [IsAuthenticated, IsBuyer | IsAdminOrManager]
 
     def perform_create(self, serializer):
         user = self.request.user
         organization = user.organization
 
-        if organization and organization.organization_type in ['supplier', 'both', 'internal']:
+        # Allow creation if the user's organization is supplier, both, internal, OR buyer
+        if organization and organization.organization_type in ['supplier', 'both', 'internal', 'buyer']:
             # Get the initial quantity before saving
             initial_quantity = serializer.validated_data.get('quantity', 0)
 
@@ -675,16 +786,19 @@ class InventoryMovementListView(generics.ListAPIView):
 
 class ProductCreateView(generics.CreateAPIView):
     """
-    Allows users from supplier or 'both' organizations to create new products.
+    Allows users from supplier, 'both', 'internal', or 'buyer' organizations
+    to create new products for their own organization.
     """
     queryset = Product.objects.all()
     serializer_class = ProductCreateSerializer
-    permission_classes = [IsAuthenticated, IsAdminOrManager]
+    # Allow IsBuyer OR IsAdminOrManager
+    permission_classes = [IsAuthenticated, IsBuyer | IsAdminOrManager]
 
     def perform_create(self, serializer):
         user = self.request.user
         organization = user.organization
-        if organization and organization.organization_type in ['supplier', 'both', 'internal']:
+        # Allow creation if the user's organization is supplier, both, internal, OR buyer
+        if organization and organization.organization_type in ['supplier', 'both', 'internal', 'buyer']:
             serializer.save(organization=organization)
         else:
             raise serializers.ValidationError("Your organization type is not authorized to create products.")
@@ -692,9 +806,12 @@ class ProductCreateView(generics.CreateAPIView):
 class BrandListView(generics.ListCreateAPIView):
     """
     Lists and allows creation of Brands for the authenticated user's organization.
+    Accessible to users from supplier, 'both', 'internal', or 'buyer' organizations
+    with IsAdminOrManager or IsBuyer permissions.
     """
     serializer_class = BrandSerializer
-    permission_classes = [IsAuthenticated, IsAdminOrManager]
+    # Allow IsBuyer OR IsAdminOrManager
+    permission_classes = [IsAuthenticated, IsBuyer | IsAdminOrManager]
 
     def get_queryset(self):
         user = self.request.user
@@ -710,18 +827,23 @@ class BrandListView(generics.ListCreateAPIView):
         # Associate the brand with the authenticated user's organization
         user = self.request.user
         organization = user.organization
-        if organization and organization.organization_type in ['supplier', 'both', 'internal']:
+        # Allow creation if the user's organization is supplier, both, internal, OR buyer
+        if organization and organization.organization_type in ['supplier', 'both', 'internal', 'buyer']:
             serializer.save(organization=organization)
         else:
+            # This validation is also handled by permission_classes, but good to have here too.
             raise serializers.ValidationError("Your organization type is not authorized to create brands.")
 
 class BrandDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     Retrieves, updates, or deletes a specific Brand belonging to the
     authenticated user's organization.
+    Accessible to users from supplier, 'both', 'internal', or 'buyer' organizations
+    with IsAdminOrManager or IsBuyer permissions.
     """
     serializer_class = BrandSerializer
-    permission_classes = [IsAuthenticated, IsAdminOrManager]
+    # Allow IsBuyer OR IsAdminOrManager
+    permission_classes = [IsAuthenticated, IsBuyer | IsAdminOrManager]
     lookup_field = 'pk'
 
     def get_queryset(self):
@@ -737,9 +859,12 @@ class BrandDetailView(generics.RetrieveUpdateDestroyAPIView):
 class CategoryListView(generics.ListCreateAPIView):
     """
     Lists and allows creation of Categories for the authenticated user's organization.
+    Accessible to users from supplier, 'both', 'internal', or 'buyer' organizations
+    with IsAdminOrManager or IsBuyer permissions.
     """
     serializer_class = CategorySerializer
-    permission_classes = [IsAuthenticated, IsAdminOrManager]
+    # Allow IsBuyer OR IsAdminOrManager
+    permission_classes = [IsAuthenticated, IsBuyer | IsAdminOrManager]
 
     def get_queryset(self):
         user = self.request.user
@@ -755,18 +880,23 @@ class CategoryListView(generics.ListCreateAPIView):
         # Associate the category with the authenticated user's organization
         user = self.request.user
         organization = user.organization
-        if organization and organization.organization_type in ['supplier', 'both', 'internal']:
+        # Allow creation if the user's organization is supplier, both, internal, OR buyer
+        if organization and organization.organization_type in ['supplier', 'both', 'internal', 'buyer']:
             serializer.save(organization=organization)
         else:
+            # This validation is also handled by permission_classes, but good to have here too.
             raise serializers.ValidationError("Your organization type is not authorized to create categories.")
 
 class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     Retrieves, updates, or deletes a specific Category belonging to the
     authenticated user's organization.
+    Accessible to users from supplier, 'both', 'internal', or 'buyer' organizations
+    with IsAdminOrManager or IsBuyer permissions.
     """
     serializer_class = CategorySerializer
-    permission_classes = [IsAuthenticated, IsAdminOrManager]
+    # Allow IsBuyer OR IsAdminOrManager
+    permission_classes = [IsAuthenticated, IsBuyer | IsAdminOrManager]
     lookup_field = 'pk'
 
     def get_queryset(self):
@@ -782,9 +912,12 @@ class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
 class LocationListView(generics.ListCreateAPIView):
     """
     Lists and allows creation of Locations for the authenticated user's organization.
+    Accessible to users from supplier, 'both', 'internal', or 'buyer' organizations
+    with IsAdminOrManager or IsBuyer permissions.
     """
     serializer_class = LocationSerializer
-    permission_classes = [IsAuthenticated, IsAdminOrManager] # Or a custom permission for location managers
+    # Allow IsBuyer OR IsAdminOrManager
+    permission_classes = [IsAuthenticated, IsBuyer | IsAdminOrManager]
 
     def get_queryset(self):
         user = self.request.user
@@ -800,18 +933,23 @@ class LocationListView(generics.ListCreateAPIView):
         # Associate the location with the authenticated user's organization
         user = self.request.user
         organization = user.organization
-        if organization and organization.organization_type in ['supplier', 'both', 'internal']:
+        # Allow creation if the user's organization is supplier, both, internal, OR buyer
+        if organization and organization.organization_type in ['supplier', 'both', 'internal', 'buyer']:
             serializer.save(organization=organization)
         else:
+            # This validation is also handled by permission_classes, but good to have here too.
             raise serializers.ValidationError("Your organization type is not authorized to create locations.")
 
 class LocationDetailView(generics.RetrieveUpdateDestroyAPIView):
     """
     Retrieves, updates, or deletes a specific Location belonging to the
     authenticated user's organization.
+    Accessible to users from supplier, 'both', 'internal', or 'buyer' organizations
+    with IsAdminOrManager or IsBuyer permissions.
     """
     serializer_class = LocationSerializer
-    permission_classes = [IsAuthenticated, IsAdminOrManager] # Or a custom permission for location managers
+    # Allow IsBuyer OR IsAdminOrManager
+    permission_classes = [IsAuthenticated, IsBuyer | IsAdminOrManager]
     lookup_field = 'pk'
 
     def get_queryset(self):
