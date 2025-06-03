@@ -4,7 +4,7 @@ from .serializers import (
     OrganizationOnboardingSerializer, OrganizationRelationshipSerializer, PotentialSupplierSerializer,
     InventorySerializer, InventoryMovementSerializer, ProductCreateSerializer, InventoryCreateSerializer,
     BrandSerializer, CategorySerializer, LocationSerializer, BuyerSupplierInventorySerializer,
-    BuyerSupplierProductSerializer # Ensure BuyerSupplierProductSerializer is imported
+    BuyerSupplierProductSerializer, OrderSerializer # Ensure BuyerSupplierProductSerializer and OrderSerializer are imported
 )
 from .models import (
     Product, Order, OrderItem, ShippingAddress, ProductImage, ProductSize, Buyer, Brand, Supplier, Driver, 
@@ -244,24 +244,42 @@ class CartDataView(APIView):
     authentication_classes = [JWTAuthentication]
 
     def get(self, request, *args, **kwargs):
-        buyer, created = Buyer.objects.get_or_create(user=request.user, defaults={'first_name': request.user.first_name, 'last_name': request.user.last_name, 'email': request.user.email}) # Use defaults for get_or_create
-        order, order_created = Order.objects.get_or_create(customer=buyer, complete=False)
-        items = order.orderitem_set.all()
+        print("--- Inside CartDataView GET method ---")
+        user = request.user
+        print(f"User: {user}")
+        print(f"User authenticated: {user.is_authenticated}")
+        print(f"User organization: {user.organization if hasattr(user, 'organization') else 'None'}")
 
-        if not items.exists(): # Check if items exist using .exists()
-            return Response({"message": "No items in the cart."}, status=status.HTTP_200_OK) # Return 200 with empty items
+        if not hasattr(user, 'organization') or not user.organization:
+             print("User not associated with an organization.")
+             return Response({"detail": "User is not associated with an organization."}, status=status.HTTP_400_BAD_REQUEST)
 
-        item_list = get_item_list(items)
+        # Assuming a Buyer profile exists for the user (created during login or first cart interaction)
+        try:
+            buyer = Buyer.objects.get(user=user)
+            print(f"Found Buyer profile for user: {buyer.id}")
+        except Buyer.DoesNotExist:
+            print("No Buyer profile found for the user. Cart is empty.")
+            # If no Buyer profile exists, the cart is empty
+            return Response({"items": [], "total_amount": "0.00"}, status=status.HTTP_200_OK)
 
-        cart_data = {
-                'total_items': order.get_cart_items,
-                'total_cost': order.get_cart_total,
-                'items': item_list,
-                'shipping': order.shipping,
-                'order_status': order.complete
-            }
+        # Find the pending order for this buyer
+        # Change complete=False to status='pending'
+        order = Order.objects.filter(customer=buyer, status='pending').first()
 
-        return Response(cart_data)
+        if order:
+            print(f"Found pending order: {order.id}")
+            # Serialize the order data, including its items
+            # Pass the request context to the serializer
+            serializer = OrderSerializer(order, context={'request': request}) # Added context={'request': request}
+            print("OrderSerializer initialized with request context.")
+            print("--- Exiting CartDataView GET method (Success) ---")
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        else:
+            print("No pending order found for the buyer. Cart is empty.")
+            # If no pending order exists, the cart is empty
+            print("--- Exiting CartDataView GET method (No Order) ---")
+            return Response({"items": [], "total_amount": "0.00"}, status=status.HTTP_200_OK)
 
 class updateCartView(APIView):
     authentication_classes = [JWTAuthentication]

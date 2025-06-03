@@ -130,33 +130,41 @@ class BuyerSupplierProductSerializer(serializers.ModelSerializer):
         return obj.get_completed
 
     def get_is_available(self, obj):
+        print(f"--- get_is_available for Product ID: {obj.id} ---")
         request = self.context.get('request')
         if request and request.user and request.user.is_authenticated:
+            print(f"User authenticated: {request.user.email}")
             user_organization = request.user.organization
+            print(f"User Organization: {user_organization.id if user_organization else 'None'}")
 
             if user_organization:
-                if obj.organization == user_organization:
-                     total_inventory = Inventory.objects.filter(
-                         product=obj,
-                         organization=user_organization
-                     ).aggregate(total_quantity=Sum('quantity'))['total_quantity']
-                     return total_inventory is not None and total_inventory > 0
-
                 if user_organization.organization_type in ['buyer', 'both']:
+                    print(f"User organization type is buyer/both: {user_organization.organization_type}")
+                    print(f"Checking relationship between Buyer Org {user_organization.id} and Supplier Org {obj.organization.id}")
                     is_accepted_supplier = OrganizationRelationship.objects.filter(
                         buyer_organization=user_organization,
                         supplier_organization=obj.organization,
                         status='accepted'
                     ).exists()
+                    print(f"Is accepted supplier relationship exists: {is_accepted_supplier}")
 
                     if is_accepted_supplier:
+                        print(f"Calculating total inventory for Product ID {obj.id} in Organization ID {obj.organization.id}")
                         total_inventory = Inventory.objects.filter(
                             product=obj,
                             organization=obj.organization
                         ).aggregate(total_quantity=Sum('quantity'))['total_quantity']
+                        print(f"Total inventory calculated: {total_inventory}")
 
-                        return total_inventory is not None and total_inventory > 0
+                        result = total_inventory is not None and total_inventory > 0
+                        print(f"Final is_available result: {result}")
+                        print("--- End get_is_available ---")
+                        return result
+                    else:
+                        print("No accepted supplier relationship found.")
 
+        print("Conditions not met for availability check.")
+        print("--- End get_is_available ---")
         return False
 
 class ProductCreateSerializer(serializers.ModelSerializer):
@@ -529,3 +537,30 @@ class CategorySerializer(serializers.ModelSerializer):
              raise serializers.ValidationError({"parent": "A category cannot be its own parent."})
 
         return data
+
+class OrderItemSerializer(serializers.ModelSerializer):
+    product = BuyerSupplierProductSerializer(read_only=True)
+
+    class Meta:
+        model = OrderItem
+        fields = [
+            'id', 'product', 'quantity', 'unit_price', 'subtotal',
+        ]
+        read_only_fields = ['subtotal']
+
+class OrderSerializer(serializers.ModelSerializer):
+    items = OrderItemSerializer(many=True, read_only=True)
+    customer = serializers.SlugRelatedField(slug_field='email', read_only=True)
+
+    class Meta:
+        model = Order
+        fields = [
+            'id', 'order_number', 'customer', 'organization', 'status',
+            'total_amount', 'order_date', 'shipping_address', 'notes',
+            'payment_status', 'created_by', 'updated_at',
+            'items'
+        ]
+        read_only_fields = [
+            'order_number', 'organization', 'status', 'total_amount',
+            'order_date', 'created_by', 'updated_at'
+        ]
