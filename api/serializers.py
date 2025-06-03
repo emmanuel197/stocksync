@@ -22,18 +22,40 @@ class ProductSizeSerializer(serializers.ModelSerializer):
         fields = ('size',)
 
 class ProductSerializer(serializers.ModelSerializer):
-    images = ProductImageSerializer(many=True, read_only=True)
-    sizes = ProductSizeSerializer(many=True, read_only=True)
-    brand = serializers.SerializerMethodField()
+    """
+    Standard Serializer for the Product model.
+    Includes all fields, including 'cost'. Used for suppliers/internal users.
+    """
+    category = serializers.SlugRelatedField(slug_field='name', read_only=True)
+    brand = serializers.SlugRelatedField(slug_field='name', read_only=True)
+    images = serializers.SerializerMethodField()
+    sizes = serializers.SerializerMethodField()
     total_completed_orders = serializers.SerializerMethodField()
     is_available = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
-        fields = ('id', 'name', 'price', 'cost', 'brand', 'image', 'description', 'images', 'sizes', 'total_completed_orders', 'is_available')
+        fields = [
+            'id', 'name', 'sku', 'description', 'category', 'brand', 'price',
+            'cost', 'image', 'barcode', 'digital', 'organization', 'active',
+            'created_at', 'updated_at', 'images', 'sizes', 'total_completed_orders', 'is_available'
+        ]
+        read_only_fields = ['organization', 'created_at', 'updated_at', 'images', 'sizes', 'total_completed_orders', 'is_available']
 
-    def get_brand(self, obj):
-        return obj.brand.name if obj.brand else None
+    def get_images(self, obj):
+        request = self.context.get('request')
+        images = ProductImage.objects.filter(product=obj)
+        try:
+            return ProductImageSerializer(images, many=True, context={'request': request}).data
+        except ImportError:
+            return []
+
+    def get_sizes(self, obj):
+        sizes = ProductSize.objects.filter(product=obj)
+        try:
+            return ProductSizeSerializer(sizes, many=True).data
+        except ImportError:
+            return []
 
     def get_total_completed_orders(self, obj):
         return obj.get_completed
@@ -43,35 +65,140 @@ class ProductSerializer(serializers.ModelSerializer):
         if request and request.user and request.user.is_authenticated:
             user_organization = request.user.organization
 
-            if user_organization and user_organization.organization_type in ['buyer', 'both']:
-                accepted_supplier_ids = OrganizationRelationship.objects.filter(
-                    buyer_organization=user_organization,
-                    status='accepted'
-                ).values_list('supplier_organization__id', flat=True)
+            if user_organization:
+                if obj.organization == user_organization:
+                     total_inventory = Inventory.objects.filter(
+                         product=obj,
+                         organization=user_organization
+                     ).aggregate(total_quantity=Sum('quantity'))['total_quantity']
+                     return total_inventory is not None and total_inventory > 0
 
-                total_inventory = Inventory.objects.filter(
-                    product=obj,
-                    location__organization__id__in=accepted_supplier_ids
-                ).aggregate(total_quantity=Sum('quantity'))['total_quantity']
+                if user_organization.organization_type in ['buyer', 'both']:
+                    is_accepted_supplier = OrganizationRelationship.objects.filter(
+                        buyer_organization=user_organization,
+                        supplier_organization=obj.organization,
+                        status='accepted'
+                    ).exists()
 
-                return total_inventory is not None and total_inventory > 0
+                    if is_accepted_supplier:
+                        total_inventory = Inventory.objects.filter(
+                            product=obj,
+                            organization=obj.organization
+                        ).aggregate(total_quantity=Sum('quantity'))['total_quantity']
 
-            if user_organization and obj.organization == user_organization:
-                return True
+                        return total_inventory is not None and total_inventory > 0
+
+        return False
+
+class BuyerSupplierProductSerializer(serializers.ModelSerializer):
+    """
+    Serializer for buyers viewing supplier products.
+    Excludes sensitive fields like 'cost'.
+    """
+    category = serializers.SlugRelatedField(slug_field='name', read_only=True)
+    brand = serializers.SlugRelatedField(slug_field='name', read_only=True)
+    images = serializers.SerializerMethodField()
+    sizes = serializers.SerializerMethodField()
+    total_completed_orders = serializers.SerializerMethodField()
+    is_available = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Product
+        fields = [
+            'id', 'name', 'sku', 'description', 'category', 'brand', 'price',
+            'image', 'barcode', 'digital', 'organization', 'active',
+            'created_at', 'updated_at', 'images', 'sizes', 'total_completed_orders', 'is_available'
+        ]
+        read_only_fields = ['organization', 'created_at', 'updated_at', 'images', 'sizes', 'total_completed_orders', 'is_available']
+
+    def get_images(self, obj):
+        request = self.context.get('request')
+        images = ProductImage.objects.filter(product=obj)
+        try:
+            return ProductImageSerializer(images, many=True, context={'request': request}).data
+        except ImportError:
+            return []
+
+    def get_sizes(self, obj):
+        sizes = ProductSize.objects.filter(product=obj)
+        try:
+            return ProductSizeSerializer(sizes, many=True).data
+        except ImportError:
+            return []
+
+    def get_total_completed_orders(self, obj):
+        return obj.get_completed
+
+    def get_is_available(self, obj):
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            user_organization = request.user.organization
+
+            if user_organization:
+                if obj.organization == user_organization:
+                     total_inventory = Inventory.objects.filter(
+                         product=obj,
+                         organization=user_organization
+                     ).aggregate(total_quantity=Sum('quantity'))['total_quantity']
+                     return total_inventory is not None and total_inventory > 0
+
+                if user_organization.organization_type in ['buyer', 'both']:
+                    is_accepted_supplier = OrganizationRelationship.objects.filter(
+                        buyer_organization=user_organization,
+                        supplier_organization=obj.organization,
+                        status='accepted'
+                    ).exists()
+
+                    if is_accepted_supplier:
+                        total_inventory = Inventory.objects.filter(
+                            product=obj,
+                            organization=obj.organization
+                        ).aggregate(total_quantity=Sum('quantity'))['total_quantity']
+
+                        return total_inventory is not None and total_inventory > 0
 
         return False
 
 class ProductCreateSerializer(serializers.ModelSerializer):
-    brand = serializers.SlugRelatedField(slug_field='name', queryset=Brand.objects.all(), allow_null=True, required=False)
     cost = serializers.DecimalField(max_digits=10, decimal_places=2)
+    category = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all(), allow_null=True, required=False)
+    brand = serializers.PrimaryKeyRelatedField(queryset=Brand.objects.all(), allow_null=True, required=False)
 
     class Meta:
         model = Product
-        fields = ('id', 'name', 'price', 'cost', 'brand', 'image', 'description')
+        fields = [
+            'id', 'name', 'sku', 'description', 'category', 'brand', 'price',
+            'cost', 'image', 'barcode', 'digital', 'active'
+        ]
         read_only_fields = ('id',)
 
+    def validate_sku(self, value):
+        request = self.context.get('request')
+        user_organization = request.user.organization
+        queryset = Product.objects.filter(sku=value, organization=user_organization)
+
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError("A product with this SKU already exists in your organization.")
+        return value
+
+    def validate_category(self, value):
+        request = self.context.get('request')
+        user_organization = request.user.organization
+        if value and value.organization != user_organization:
+            raise serializers.ValidationError("You can only assign categories belonging to your organization.")
+        return value
+
+    def validate_brand(self, value):
+        request = self.context.get('request')
+        user_organization = request.user.organization
+        if value and value.organization != user_organization:
+            raise serializers.ValidationError("You can only assign brands belonging to your organization.")
+        return value
+
 class OrganizationSerializer(serializers.ModelSerializer):
-    """Serializer for the Organization model."""
     class Meta:
         model = Organization
         fields = [
@@ -84,22 +211,20 @@ class OrganizationSerializer(serializers.ModelSerializer):
         ]
 
 class OrganizationOnboardingSerializer(serializers.Serializer):
-    # Organization fields
     name = serializers.CharField(max_length=255)
     logo = serializers.ImageField(required=False, allow_null=True)
     address = serializers.CharField(required=False, allow_null=True)
-    contact_email = serializers.EmailField() # Make contact email required for activation
+    contact_email = serializers.EmailField()
     contact_phone = serializers.CharField(max_length=20, required=False, allow_null=True)
     subscription_plan = serializers.CharField(max_length=50, default='free')
     organization_type = serializers.ChoiceField(
         choices=Organization.ORGANIZATION_TYPE_CHOICES,
-        default='buyer' # Default to buyer as per the business plan
+        default='buyer'
     )
 
-    # Initial Admin User fields
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
-    email = serializers.EmailField() # User's login email
+    email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
     re_password = serializers.CharField(write_only=True)
 
@@ -195,7 +320,6 @@ class OrganizationRelationshipSerializer(serializers.ModelSerializer):
         return instance
 
 class PotentialSupplierSerializer(serializers.ModelSerializer):
-    """Serializer for listing potential supplier organizations."""
     class Meta:
         model = Organization
         fields = [
@@ -253,7 +377,6 @@ class DriverSerializer(serializers.ModelSerializer):
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("A user with that email already exists.")
         return value
-# ...existing serializers...
 
 class LocationSerializer(serializers.ModelSerializer):
     class Meta:
@@ -276,8 +399,6 @@ class LocationSerializer(serializers.ModelSerializer):
 
         return data
 
-
-
 class InventorySerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
     location = LocationSerializer(read_only=True)
@@ -291,14 +412,10 @@ class InventorySerializer(serializers.ModelSerializer):
         read_only_fields = ['last_stocked', 'last_sold', 'created_at', 'updated_at', 'organization']
 
 class BuyerSupplierInventorySerializer(serializers.ModelSerializer):
-    """
-    Serializer for buyers viewing supplier inventory.
-    Hides the exact quantity, only indicates availability.
-    """
-    product = ProductSerializer(read_only=True)
+    product = BuyerSupplierProductSerializer(read_only=True) # Ensure this uses the buyer product serializer
     location = LocationSerializer(read_only=True)
-    # Add a field to indicate availability without showing quantity
     is_available = serializers.SerializerMethodField()
+    # Do NOT include 'quantity' directly in fields here
 
     class Meta:
         model = Inventory
@@ -309,10 +426,29 @@ class BuyerSupplierInventorySerializer(serializers.ModelSerializer):
         read_only_fields = ['last_stocked', 'created_at', 'updated_at', 'organization']
 
     def get_is_available(self, obj):
-        """
-        Returns True if quantity is greater than 0, False otherwise.
-        """
+        # This method is used for supplier inventory items
         return obj.quantity > 0
+
+    def to_representation(self, instance):
+        # Get the default representation using the fields defined in Meta
+        representation = super().to_representation(instance)
+
+        request = self.context.get('request')
+        user_organization = request.user.organization if request and request.user and request.user.is_authenticated else None
+
+        # Check if the inventory item belongs to the requesting user's organization
+        if user_organization and instance.organization == user_organization:
+            # If it's the buyer's own inventory, include the actual quantity
+            representation['quantity'] = instance.quantity
+            # Optionally remove is_available if you only want quantity for own inventory
+            # representation.pop('is_available', None)
+        else:
+            # If it's a supplier's inventory, ensure quantity is not shown
+            # (It's not in the fields list, but this is a safeguard)
+            representation.pop('quantity', None)
+            # is_available is already included by default for supplier inventory
+
+        return representation
 
 class InventoryCreateSerializer(serializers.ModelSerializer):
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
@@ -350,7 +486,7 @@ class InventoryMovementSerializer(serializers.ModelSerializer):
     class Meta:
         model = InventoryMovement
         fields = [
-            'id', 'inventory', 'movement_type', 'quantity_change', # <-- Changed to quantity_change
+            'id', 'inventory', 'movement_type', 'quantity_change',
             'timestamp', 'moved_by'
         ]
         read_only_fields = [
@@ -397,26 +533,5 @@ class CategorySerializer(serializers.ModelSerializer):
 
         if self.instance and parent and self.instance.pk == parent.pk:
              raise serializers.ValidationError({"parent": "A category cannot be its own parent."})
-
-        return data
-
-class LocationSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Location
-        fields = ['id', 'name', 'address', 'description', 'is_active', 'created_at', 'updated_at']
-        read_only_fields = ['created_at', 'updated_at']
-
-    def validate(self, data):
-        request = self.context.get('request')
-        user_organization = request.user.organization
-        name = data.get('name')
-
-        queryset = Location.objects.filter(name=name, organization=user_organization)
-
-        if self.instance:
-            queryset = queryset.exclude(pk=self.instance.pk)
-
-        if queryset.exists():
-            raise serializers.ValidationError({"name": "A location with this name already exists in your organization."})
 
         return data
