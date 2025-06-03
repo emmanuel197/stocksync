@@ -30,11 +30,11 @@ class ProductSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Product
-        fields = ('id', 'name', 'price', 'discount_price', 'brand', 'image', 'description', 'images', 'sizes', 'total_completed_orders', 'is_available')
+        fields = ('id', 'name', 'price', 'cost', 'brand', 'image', 'description', 'images', 'sizes', 'total_completed_orders', 'is_available')
 
     def get_brand(self, obj):
-        return obj.brand.name if obj.brand else None  
-    
+        return obj.brand.name if obj.brand else None
+
     def get_total_completed_orders(self, obj):
         return obj.get_completed
 
@@ -62,13 +62,12 @@ class ProductSerializer(serializers.ModelSerializer):
         return False
 
 class ProductCreateSerializer(serializers.ModelSerializer):
-    # Fields that can be written to
     brand = serializers.SlugRelatedField(slug_field='name', queryset=Brand.objects.all(), allow_null=True, required=False)
-    # Note: 'organization' will be set automatically in the view
+    cost = serializers.DecimalField(max_digits=10, decimal_places=2)
 
     class Meta:
         model = Product
-        fields = ('id', 'name', 'price', 'discount_price', 'brand', 'image', 'description')
+        fields = ('id', 'name', 'price', 'cost', 'brand', 'image', 'description')
         read_only_fields = ('id',)
 
 class OrganizationSerializer(serializers.ModelSerializer):
@@ -105,58 +104,46 @@ class OrganizationOnboardingSerializer(serializers.Serializer):
     re_password = serializers.CharField(write_only=True)
 
     def validate(self, data):
-        # Add custom validation if needed, e.g., check if user email already exists
         if User.objects.filter(email=data['email']).exists():
              raise serializers.ValidationError({"email": "A user with that email already exists."})
-        # Validate organization name uniqueness
         if Organization.objects.filter(name=data['name']).exists():
              raise serializers.ValidationError({"name": "An organization with that name already exists."})
 
-        # Validate that password and re_password match
         if data['password'] != data['re_password']:
             raise serializers.ValidationError({"re_password": "Passwords do not match."})
 
         return data
 
     def create(self, validated_data):
-        # Extract user data
         user_data = {
             'first_name': validated_data.pop('first_name'),
             'last_name': validated_data.pop('last_name'),
             'email': validated_data.pop('email'),
             'password': validated_data.pop('password'),
         }
-        # Pop the re_password field as it's only for validation
         validated_data.pop('re_password')
 
-        # Extract organization type
         organization_type = validated_data.pop('organization_type')
 
-        # Create the Organization (active_status defaults to False in the model)
         organization = Organization.objects.create(organization_type=organization_type, **validated_data)
 
-        # Create the initial Admin User and associate with the organization
-        # Use create_user to handle password hashing
-        # Generate a username from the email since create_user requires it
-        username = user_data['email'].split('@')[0] # Simple username from email prefix
+        username = user_data['email'].split('@')[0]
 
         user = User.objects.create_user(
-            username=username, # Provide the generated username
-            organization=organization, # Associate user with the organization
-            role='admin', # Set the role to admin
-            is_active=False, # User should also be inactive until activated
+            username=username,
+            organization=organization,
+            role='admin',
+            is_active=False,
             **user_data
         )
 
         return {'organization': organization, 'user': user}
 
 class OrganizationRelationshipSerializer(serializers.ModelSerializer):
-    # Use SlugRelatedField to represent organizations by their name in read operations
     buyer_organization = serializers.SlugRelatedField(slug_field='name', read_only=True)
     supplier_organization = serializers.SlugRelatedField(slug_field='name', read_only=True)
-    initiated_by = serializers.SlugRelatedField(slug_field='email', read_only=True) # Show initiator email
+    initiated_by = serializers.SlugRelatedField(slug_field='email', read_only=True)
 
-    # Add write-only fields for initiating a relationship
     target_organization_id = serializers.PrimaryKeyRelatedField(
         queryset=Organization.objects.all(), write_only=True, label="Target Organization ID"
     )
@@ -170,31 +157,25 @@ class OrganizationRelationshipSerializer(serializers.ModelSerializer):
         read_only_fields = ['initiated_by', 'created_at', 'updated_at']
 
     def create(self, validated_data):
-        # This create method will be used for initiating a relationship request
         target_organization = validated_data.pop('target_organization_id')
-        user = self.context['request'].user # Get the initiating user from the request context
-        initiating_organization = user.organization # The organization initiating the request
+        user = self.context['request'].user
+        initiating_organization = user.organization
 
-        # Determine the relationship type based on the initiating organization's type
         if initiating_organization.organization_type in ['buyer', 'both']:
-            # Initiating organization is a buyer, applying to be a buyer of the target (supplier)
             buyer_org = initiating_organization
             supplier_org = target_organization
         elif initiating_organization.organization_type in ['supplier', 'both']:
-             # Initiating organization is a supplier, applying to be a supplier to the target (buyer)
              buyer_org = target_organization
              supplier_org = initiating_organization
         else:
              raise serializers.ValidationError("Your organization type does not allow initiating relationships.")
 
-        # Check if a relationship already exists
         if OrganizationRelationship.objects.filter(
             buyer_organization=buyer_org,
             supplier_organization=supplier_org
         ).exists():
             raise serializers.ValidationError("A relationship between these organizations already exists.")
 
-        # Create the pending relationship
         relationship = OrganizationRelationship.objects.create(
             buyer_organization=buyer_org,
             supplier_organization=supplier_org,
@@ -204,8 +185,6 @@ class OrganizationRelationshipSerializer(serializers.ModelSerializer):
         return relationship
 
     def update(self, instance, validated_data):
-        # This update method will be used for accepting/rejecting a relationship
-        # Only the 'status' field should be updatable via this serializer
         if 'status' in validated_data:
             instance.status = validated_data['status']
             instance.save(update_fields=['status', 'updated_at'])
@@ -215,7 +194,6 @@ class OrganizationRelationshipSerializer(serializers.ModelSerializer):
 
         return instance
 
-# Add a serializer for listing potential suppliers
 class PotentialSupplierSerializer(serializers.ModelSerializer):
     """Serializer for listing potential supplier organizations."""
     class Meta:
@@ -226,7 +204,6 @@ class PotentialSupplierSerializer(serializers.ModelSerializer):
         ]
 
 class BuyerSerializer(serializers.ModelSerializer):
-    # Add fields for the associated user
     user_email = serializers.EmailField(write_only=True)
     user_password = serializers.CharField(write_only=True)
     user_first_name = serializers.CharField(max_length=150, write_only=True)
@@ -236,16 +213,14 @@ class BuyerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Buyer
         fields = '__all__'
-        read_only_fields = ('organization', 'buyer_code', 'created_at', 'updated_at') # organization will be set by view
+        read_only_fields = ('organization', 'buyer_code', 'created_at', 'updated_at')
 
     def validate_user_email(self, value):
-        # Validate that the user email is unique
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("A user with that email already exists.")
         return value
 
 class SupplierSerializer(serializers.ModelSerializer):
-    # Add fields for the associated user
     user_email = serializers.EmailField(write_only=True)
     user_password = serializers.CharField(write_only=True)
     user_first_name = serializers.CharField(max_length=150, write_only=True)
@@ -255,16 +230,14 @@ class SupplierSerializer(serializers.ModelSerializer):
     class Meta:
         model = Supplier
         fields = '__all__'
-        read_only_fields = ('organization', 'supplier_code', 'created_at', 'updated_at') # organization will be set by view
+        read_only_fields = ('organization', 'supplier_code', 'created_at', 'updated_at')
 
     def validate_user_email(self, value):
-        # Validate that the user email is unique
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("A user with that email already exists.")
         return value
 
 class DriverSerializer(serializers.ModelSerializer):
-    # Add fields for the associated user
     user_email = serializers.EmailField(write_only=True)
     user_password = serializers.CharField(write_only=True)
     user_first_name = serializers.CharField(max_length=150, write_only=True)
@@ -274,17 +247,16 @@ class DriverSerializer(serializers.ModelSerializer):
     class Meta:
         model = Driver
         fields = '__all__'
-        read_only_fields = ('organization', 'created_at', 'updated_at') # organization will be set by view
+        read_only_fields = ('organization', 'created_at', 'updated_at')
 
     def validate_user_email(self, value):
-        # Validate that the user email is unique
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("A user with that email already exists.")
         return value
 
 class InventorySerializer(serializers.ModelSerializer):
-    product = ProductSerializer(read_only=True) # Include product details
-    location = serializers.SlugRelatedField(slug_field='name', read_only=True) # Show location name
+    product = ProductSerializer(read_only=True)
+    location = serializers.SlugRelatedField(slug_field='name', read_only=True)
 
     class Meta:
         model = Inventory
@@ -308,7 +280,6 @@ class InventorySerializer(serializers.ModelSerializer):
             self.fields.pop('quantity', None)
 
 class InventoryCreateSerializer(serializers.ModelSerializer):
-    # Use PrimaryKeyRelatedField for product and location to allow writing their IDs
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
     location = serializers.PrimaryKeyRelatedField(queryset=Location.objects.all())
 
@@ -320,7 +291,6 @@ class InventoryCreateSerializer(serializers.ModelSerializer):
         read_only_fields = ('id',)
 
     def validate(self, data):
-        # Ensure the product and location belong to the authenticated user's organization
         request = self.context.get('request')
         user_organization = request.user.organization
 
@@ -333,7 +303,6 @@ class InventoryCreateSerializer(serializers.ModelSerializer):
         if location and location.organization != user_organization:
             raise serializers.ValidationError({"location": "You can only add inventory to locations belonging to your organization."})
 
-        # Check if an inventory item for this product and location already exists
         if Inventory.objects.filter(product=product, location=location).exists():
              raise serializers.ValidationError({"non_field_errors": "Inventory for this product at this location already exists. Consider updating the existing item."})
 
@@ -346,7 +315,7 @@ class InventoryMovementSerializer(serializers.ModelSerializer):
     class Meta:
         model = InventoryMovement
         fields = [
-            'id', 'inventory', 'movement_type', 'quantity_changed',
+            'id', 'inventory', 'movement_type', 'quantity_change', # <-- Changed to quantity_change
             'timestamp', 'moved_by'
         ]
         read_only_fields = [
@@ -360,14 +329,12 @@ class InventoryMovementSerializer(serializers.ModelSerializer):
         if 'inventory' in self.fields:
             self.fields['inventory'].context['request'] = request
 
-# Modified BrandSerializer
 class BrandSerializer(serializers.ModelSerializer):
     class Meta:
         model = Brand
         fields = ['id', 'name']
         read_only_fields = []
 
-# Modified CategorySerializer
 class CategorySerializer(serializers.ModelSerializer):
     parent = serializers.PrimaryKeyRelatedField(
         queryset=Category.objects.all(), allow_null=True, required=False
@@ -395,5 +362,26 @@ class CategorySerializer(serializers.ModelSerializer):
 
         if self.instance and parent and self.instance.pk == parent.pk:
              raise serializers.ValidationError({"parent": "A category cannot be its own parent."})
+
+        return data
+
+class LocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Location
+        fields = ['id', 'name', 'address', 'description', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at']
+
+    def validate(self, data):
+        request = self.context.get('request')
+        user_organization = request.user.organization
+        name = data.get('name')
+
+        queryset = Location.objects.filter(name=name, organization=user_organization)
+
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError({"name": "A location with this name already exists in your organization."})
 
         return data

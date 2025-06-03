@@ -1,4 +1,9 @@
 from django.db import models
+from django.conf import settings
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from django.db.models import Sum
+import uuid
 from accounts.models import User, Organization
 from decimal import Decimal
 import random, string
@@ -231,7 +236,7 @@ class Product(models.Model):
     @property
     def profit_margin(self):
         """Calculate profit margin percentage"""
-        if self.cost > 0:
+        if self.cost is not None and self.price is not None and self.price > 0:
             return ((self.price - self.cost) / self.price) * 100
         return None
 
@@ -239,6 +244,12 @@ class Product(models.Model):
     def total_inventory(self):
         """Get total inventory quantity across all locations"""
         return self.inventory_items.aggregate(total=models.Sum('quantity'))['total'] or 0
+
+    @property
+    def get_completed(self):
+        """Calculates the total quantity of this product in completed orders."""
+        total = self.order_items.filter(order__status='delivered').aggregate(Sum('quantity'))['quantity__sum']
+        return total if total is not None else 0
 
 
 class Size(models.Model):
@@ -292,15 +303,18 @@ class Location(models.Model):
 class Inventory(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='inventory_items')
     location = models.ForeignKey(Location, on_delete=models.CASCADE, related_name='inventory_items')
-    quantity = models.IntegerField(default=0)
+    quantity = models.PositiveIntegerField(default=0)
     min_stock_level = models.IntegerField(default=5, help_text="Minimum stock level before alert is triggered")
     max_stock_level = models.IntegerField(default=100, help_text="Maximum stock level")
-    last_updated = models.DateTimeField(auto_now=True)
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='inventory_items')
+    last_stocked = models.DateTimeField(auto_now=True)
+    last_sold = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='inventory', null=True, blank=True)
 
     class Meta:
         verbose_name_plural = 'Inventory Items'
-        unique_together = ['product', 'location', 'organization']
+        unique_together = ['product', 'location']
         indexes = [
             models.Index(fields=['product']),
             models.Index(fields=['location']),

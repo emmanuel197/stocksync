@@ -3,7 +3,7 @@ from .serializers import (
     ProductSerializer, OrganizationSerializer, BuyerSerializer, SupplierSerializer, DriverSerializer, 
     OrganizationOnboardingSerializer, OrganizationRelationshipSerializer, PotentialSupplierSerializer,
     InventorySerializer, InventoryMovementSerializer, ProductCreateSerializer, InventoryCreateSerializer,
-    BrandSerializer, CategorySerializer
+    BrandSerializer, CategorySerializer, LocationSerializer
 )
 from .models import (
     Product, Order, OrderItem, ShippingAddress, ProductImage, ProductSize, Buyer, Brand, Supplier, Driver, 
@@ -32,12 +32,37 @@ from django.db import transaction
 
 # Create your views here.
 class ProductAPIView(generics.ListAPIView):
-    queryset = Product.objects.prefetch_related(
-        Prefetch('images', queryset=ProductImage.objects.all()),
-        Prefetch('sizes', queryset=ProductSize.objects.all())
-    )
+    """
+    Lists products based on the authenticated user's organization type and relationships.
+    Suppliers see their own products.
+    Buyers see products from accepted supplier relationships.
+    """
     serializer_class = ProductSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated] # Require authentication
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            # User is authenticated but not associated with an organization
+            return Product.objects.none()
+
+        if organization.organization_type in ['supplier', 'both', 'internal']:
+            # Supplier or internal users see their own products
+            return Product.objects.filter(organization=organization).order_by('name')
+
+        elif organization.organization_type == 'buyer':
+            # Buyers see products from suppliers they have an accepted relationship with
+            accepted_supplier_ids = OrganizationRelationship.objects.filter(
+                buyer_organization=organization,
+                status='accepted'
+            ).values_list('supplier_organization__id', flat=True)
+
+            return Product.objects.filter(organization__id__in=accepted_supplier_ids).order_by('name')
+
+        # Default case or other organization types not explicitly handled
+        return Product.objects.none()
 
 class FilteredProductListView(generics.ListAPIView):
     queryset = Product.objects.all()
@@ -516,20 +541,42 @@ class InventoryDetailView(generics.RetrieveAPIView):
 
 class InventoryCreateView(generics.CreateAPIView):
     """
-    Allows users from supplier or 'both' organizations to add inventory items.
-    Ensures the product and location belong to the user's organization.
+    Allows users from supplier or 'both' organizations to create new inventory items.
+    Creates an InventoryMovement record for the initial stock.
     """
     queryset = Inventory.objects.all()
     serializer_class = InventoryCreateSerializer
-    permission_classes = [IsAuthenticated, IsAdminOrManager]
+    permission_classes = [IsAuthenticated, IsAdminOrManager] # Or a custom permission for inventory managers
 
     def perform_create(self, serializer):
-        serializer.save()
+        user = self.request.user
+        organization = user.organization
+
+        if organization and organization.organization_type in ['supplier', 'both', 'internal']:
+            # Get the initial quantity before saving
+            initial_quantity = serializer.validated_data.get('quantity', 0)
+
+            # Save the inventory instance
+            inventory_instance = serializer.save(organization=organization)
+
+            # Create an InventoryMovement record for the initial stock
+            if initial_quantity > 0:
+                InventoryMovement.objects.create(
+                    inventory=inventory_instance,
+                    movement_type='addition', # Or 'initial_stock'
+                    quantity_change=initial_quantity,
+                    user=user,
+                    organization=organization
+                )
+
+        else:
+            raise serializers.ValidationError("Your organization type is not authorized to create inventory.")
 
 class InventoryUpdateView(generics.RetrieveUpdateAPIView):
     """
     Allows users from supplier or 'both' organizations to update inventory quantity.
     Ensures the inventory item belongs to the user's organization.
+    Creates an InventoryMovement record for the change.
     """
     queryset = Inventory.objects.all()
     serializer_class = InventorySerializer
@@ -550,13 +597,41 @@ class InventoryUpdateView(generics.RetrieveUpdateAPIView):
             return Inventory.objects.none()
 
     def update(self, request, *args, **kwargs):
-        return super().update(request, *args, **kwargs)
+        instance = self.get_object()
+        old_quantity = instance.quantity # Get quantity before update
+
+        response = super().update(request, *args, **kwargs) # Perform the update
+
+        instance.refresh_from_db() # Refresh instance to get the new quantity
+        new_quantity = instance.quantity
+
+        quantity_change = new_quantity - old_quantity
+
+        if quantity_change != 0:
+            movement_type = 'adjustment'
+            if quantity_change > 0:
+                movement_type = 'addition'
+            elif quantity_change < 0:
+                movement_type = 'subtraction'
+
+            user = self.request.user
+            organization = user.organization
+
+            InventoryMovement.objects.create(
+                inventory=instance,
+                movement_type=movement_type,
+                quantity_change=quantity_change,
+                user=user,
+                organization=organization
+            )
+
+        return response
 
 
 class InventoryMovementListView(generics.ListAPIView):
     """
-    List inventory movements for inventory items accessible to the
-    authenticated user's organization.
+    Lists inventory movements for the user's organization,
+    filtered based on their organization type and relationships.
     """
     serializer_class = InventoryMovementSerializer
     permission_classes = [IsAuthenticated]
@@ -568,22 +643,33 @@ class InventoryMovementListView(generics.ListAPIView):
         if not organization:
             return InventoryMovement.objects.none()
 
-        # Prefetch related inventory, product, and user
-        queryset = InventoryMovement.objects.select_related('inventory__product', 'moved_by')
+        # Start with all movements for the user's organization
+        queryset = InventoryMovement.objects.filter(organization=organization)
+
+        # Prefetch related inventory, product, and user for efficiency
+        # Use select_related for ForeignKey relationships
+        queryset = queryset.select_related('inventory__product', 'user')
 
         # Filter movements based on the accessibility of the related inventory item
         if organization.organization_type in ['buyer', 'both']:
+            # Buyers see movements for inventory items belonging to products
+            # from organizations they have an 'accepted' supplier relationship with.
             accepted_supplier_ids = OrganizationRelationship.objects.filter(
                 buyer_organization=organization,
                 status='accepted'
             ).values_list('supplier_organization__id', flat=True)
+
             queryset = queryset.filter(inventory__product__organization__id__in=accepted_supplier_ids)
 
         elif organization.organization_type in ['supplier', 'internal']:
+             # Suppliers/Internal users see movements for inventory items
+             # belonging to products from their own organization.
              queryset = queryset.filter(inventory__product__organization=organization)
 
         else:
+            # Other organization types might have different access rules
             queryset = InventoryMovement.objects.none()
+
 
         return queryset.order_by('-timestamp')
 
@@ -692,3 +778,48 @@ class CategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
 
         # Only allow access to categories belonging to the user's organization
         return Category.objects.filter(organization=organization)
+
+class LocationListView(generics.ListCreateAPIView):
+    """
+    Lists and allows creation of Locations for the authenticated user's organization.
+    """
+    serializer_class = LocationSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrManager] # Or a custom permission for location managers
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            return Location.objects.none()
+
+        # Only list locations belonging to the user's organization
+        return Location.objects.filter(organization=organization).order_by('name')
+
+    def perform_create(self, serializer):
+        # Associate the location with the authenticated user's organization
+        user = self.request.user
+        organization = user.organization
+        if organization and organization.organization_type in ['supplier', 'both', 'internal']:
+            serializer.save(organization=organization)
+        else:
+            raise serializers.ValidationError("Your organization type is not authorized to create locations.")
+
+class LocationDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    Retrieves, updates, or deletes a specific Location belonging to the
+    authenticated user's organization.
+    """
+    serializer_class = LocationSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrManager] # Or a custom permission for location managers
+    lookup_field = 'pk'
+
+    def get_queryset(self):
+        user = self.request.user
+        organization = user.organization
+
+        if not organization:
+            return Location.objects.none()
+
+        # Only allow access to locations belonging to the user's organization
+        return Location.objects.filter(organization=organization)
