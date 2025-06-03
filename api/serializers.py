@@ -412,41 +412,35 @@ class InventorySerializer(serializers.ModelSerializer):
         read_only_fields = ['last_stocked', 'last_sold', 'created_at', 'updated_at', 'organization']
 
 class BuyerSupplierInventorySerializer(serializers.ModelSerializer):
-    product = BuyerSupplierProductSerializer(read_only=True) # Ensure this uses the buyer product serializer
     location = LocationSerializer(read_only=True)
     is_available = serializers.SerializerMethodField()
-    # Do NOT include 'quantity' directly in fields here
 
     class Meta:
         model = Inventory
         fields = [
-            'id', 'product', 'location', 'is_available', 'last_stocked',
+            'id', 'location', 'is_available', 'last_stocked',
             'created_at', 'updated_at', 'organization'
         ]
         read_only_fields = ['last_stocked', 'created_at', 'updated_at', 'organization']
 
     def get_is_available(self, obj):
-        # This method is used for supplier inventory items
         return obj.quantity > 0
 
     def to_representation(self, instance):
-        # Get the default representation using the fields defined in Meta
         representation = super().to_representation(instance)
 
         request = self.context.get('request')
         user_organization = request.user.organization if request and request.user and request.user.is_authenticated else None
 
-        # Check if the inventory item belongs to the requesting user's organization
         if user_organization and instance.organization == user_organization:
-            # If it's the buyer's own inventory, include the actual quantity
+            product_serializer = ProductSerializer(instance.product, context=self.context)
+            representation['product'] = product_serializer.data
             representation['quantity'] = instance.quantity
-            # Optionally remove is_available if you only want quantity for own inventory
-            # representation.pop('is_available', None)
+            representation.pop('is_available', None)
         else:
-            # If it's a supplier's inventory, ensure quantity is not shown
-            # (It's not in the fields list, but this is a safeguard)
+            product_serializer = BuyerSupplierProductSerializer(instance.product, context=self.context)
+            representation['product'] = product_serializer.data
             representation.pop('quantity', None)
-            # is_available is already included by default for supplier inventory
 
         return representation
 

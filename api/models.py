@@ -95,15 +95,18 @@ class Buyer(models.Model):
         ('custom', 'Custom'),
     ]
 
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='buyer_profile', null=True, blank=True)  # Add null=True, blank=True
+    organization = models.ForeignKey('accounts.Organization', on_delete=models.SET_NULL, null=True, blank=True, related_name='buyers')
+    first_name = models.CharField(max_length=100, null=True, blank=True)
+    last_name = models.CharField(max_length=100, null=True, blank=True)
+    email = models.EmailField(null=True, blank=True)
     name = models.CharField(max_length=200)
     buyer_code = models.CharField(max_length=50, unique=True)
     contact_person = models.CharField(max_length=100, blank=True, null=True)
-    email = models.EmailField(blank=True, null=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
     address = models.TextField(blank=True, null=True)
     payment_terms = models.CharField(max_length=20, choices=PAYMENT_TERMS_CHOICES, default='prepaid')
     credit_limit = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='buyers')
     notes = models.TextField(blank=True, null=True)
     active_status = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -118,7 +121,7 @@ class Buyer(models.Model):
         ]
 
     def __str__(self):
-        return self.name
+        return f"{self.first_name} {self.last_name}"
 
     def save(self, *args, **kwargs):
         # Generate buyer code if not set
@@ -422,7 +425,7 @@ class Order(models.Model):
         ('refunded', 'Refunded'),
     ]
 
-    order_number = models.CharField(max_length=20, unique=True)
+    order_number = models.CharField(max_length=20, unique=True, blank=True, null=True)
     order_date = models.DateTimeField(auto_now_add=True)
     customer = models.ForeignKey(Buyer, on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
@@ -431,7 +434,7 @@ class Order(models.Model):
     shipping_address = models.TextField(blank=True, null=True)
     customer_info = models.JSONField(blank=True, null=True, help_text="Additional customer information")
     notes = models.TextField(blank=True, null=True)
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='orders')
+    organization = models.ForeignKey('accounts.Organization', on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_orders')
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -450,15 +453,19 @@ class Order(models.Model):
     def save(self, *args, **kwargs):
         if not self.order_number:
             prefix = 'ORD'
-            last_order = Order.objects.filter(organization=self.organization).order_by('-id').first()
-            if last_order and last_order.order_number.startswith(prefix):
-                try:
-                    last_number = int(last_order.order_number[len(prefix):])
-                    self.order_number = f"{prefix}{last_number + 1:06d}"
-                except ValueError:
-                    self.order_number = f"{prefix}000001"
+            if self.organization:
+                last_order = Order.objects.filter(organization=self.organization).order_by('-id').first()
+                if last_order and last_order.order_number:
+                    try:
+                        last_number = int(last_order.order_number.split('-')[-1])
+                        new_number = last_number + 1
+                        self.order_number = f'{prefix}-{self.organization.id}-{new_number:06d}'
+                    except (ValueError, IndexError):
+                        self.order_number = f'{prefix}-{self.organization.id}-000001'
+                else:
+                    self.order_number = f'{prefix}-{self.organization.id}-000001'
             else:
-                self.order_number = f"{prefix}000001"
+                pass
 
         if not self.id:
             super().save(*args, **kwargs)
@@ -516,9 +523,6 @@ class OrderItem(models.Model):
 
     def save(self, *args, **kwargs):
         self.subtotal = self.quantity * self.unit_price
-
-        if self.order and not self.organization_id:
-            self.organization = self.order.organization
 
         super().save(*args, **kwargs)
 

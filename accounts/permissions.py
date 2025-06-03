@@ -41,8 +41,13 @@ class IsBuyer(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return True
 
-        # Write permissions are only allowed to buyer users.
-        return request.user and request.user.is_authenticated and request.user.role == 'buyer'
+        # Write permissions are only allowed to users associated with a 'buyer' organization.
+        user = request.user
+        # Check if user is authenticated and has an organization linked
+        if user and user.is_authenticated and hasattr(user, 'organization') and user.organization:
+            # Check if the organization type is 'buyer' or 'both' (if 'both' should also have buyer permissions)
+            return user.organization.organization_type in ['buyer', 'both']
+        return False
 
 class IsSupplier(permissions.BasePermission):
     """Custom permission to only allow supplier users to access an object."""

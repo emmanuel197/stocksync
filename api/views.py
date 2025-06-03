@@ -184,34 +184,60 @@ class CreateOrUpdateOrderView(APIView):
         data = request.data
         product_id = data.get('product_id')
         product = get_object_or_404(Product, id=product_id)
-        buyer, created = Buyer.objects.get_or_create(user=request.user, defaults={'first_name': request.user.first_name, 'last_name': request.user.last_name, 'email': request.user.email}) # Use defaults for get_or_create
-        order, created = Order.objects.get_or_create(customer=buyer, complete=False)
+
+        user = request.user
+        if not hasattr(user, 'organization') or not user.organization:
+             return Response({"detail": "User is not associated with an organization."}, status=status.HTTP_400_BAD_REQUEST)
+
+        buyer, created = Buyer.objects.get_or_create(
+            user=user,
+            defaults={
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'email': user.email,
+                'organization': user.organization
+            }
+        )
+
+        if not buyer.organization:
+             if hasattr(user, 'organization') and user.organization:
+                 buyer.organization = user.organization
+                 buyer.save()
+             else:
+                 return Response({"detail": "Buyer is not associated with an organization."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Get or create the pending order for this buyer
+        order, created = Order.objects.get_or_create(
+            customer=buyer,
+            status='pending',
+        )
+
+        # Explicitly set the organization on the order if it's not already set
+        # This handles cases where an existing order without an organization is retrieved
+        if not order.organization:
+            order.organization = buyer.organization
+            order.save() # Save the order if the organization was just set
+
+        # Ensure the order has an organization before creating OrderItem
+        if not order.organization:
+             return Response({"detail": "Could not determine organization for the order."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Get or create the order item
         order_item, created = OrderItem.objects.get_or_create(
             order=order,
             product=product,
-            defaults={'quantity': 1}
+            defaults={
+                'quantity': 1,
+                'unit_price': product.price,
+                'organization': order.organization
+            }
         )
 
         if not created:
             order_item.quantity += 1
             order_item.save()
 
-        # Fetch the updated order item with related product
-        updated_order_item = OrderItem.objects.select_related('product').get(id=order_item.id)
-
-        item_data = {
-            'id': updated_order_item.product.id,
-            'product': updated_order_item.product.name,
-            'price': updated_order_item.product.price,
-            'image': updated_order_item.product.image.url if updated_order_item.product.image else None, # Handle potential missing image
-            'quantity': updated_order_item.quantity,
-            'total': updated_order_item.get_total,
-            'total_completed_orders': updated_order_item.product.get_completed,
-        }
-
-        return Response({'message': 'Order created successfully', 'total_items': order.get_cart_items,
-                'total_cost': order.get_cart_total,
-                'updated_item': item_data}, status=status.HTTP_200_OK)
+        return Response({"message": "Item added/updated in cart"}, status=status.HTTP_200_OK)
 
 class CartDataView(APIView):
     permission_classes = [IsAuthenticated, IsBuyer]
@@ -797,13 +823,15 @@ class InventoryCreateView(generics.CreateAPIView):
 
 class InventoryUpdateView(generics.RetrieveUpdateAPIView):
     """
-    Allows users from supplier or 'both' organizations to update inventory quantity.
+    Allows users from supplier, 'both', 'internal', or 'buyer' organizations
+    to update inventory quantity for items belonging to their own organization.
     Ensures the inventory item belongs to the user's organization.
     Creates an InventoryMovement record for the change.
     """
     queryset = Inventory.objects.all()
     serializer_class = InventorySerializer
-    permission_classes = [IsAuthenticated, IsAdminOrManager]
+    # Allow IsBuyer OR IsAdminOrManager
+    permission_classes = [IsAuthenticated, IsBuyer | IsAdminOrManager]
     lookup_field = 'pk'
 
     def get_queryset(self):
@@ -813,10 +841,14 @@ class InventoryUpdateView(generics.RetrieveUpdateAPIView):
         if not organization:
             return Inventory.objects.none()
 
-        if organization.organization_type in ['supplier', 'both', 'internal']:
-             queryset = Inventory.objects.filter(product__organization=organization)
+        # Users from supplier, both, internal, OR buyer organizations
+        # should be able to update inventory items belonging to THEIR OWN organization.
+        if organization.organization_type in ['supplier', 'both', 'internal', 'buyer']:
+             # Filter inventory items where the inventory's organization matches the user's organization
+             queryset = Inventory.objects.filter(organization=organization)
              return queryset
         else:
+            # Other organization types are not authorized to update inventory via this view
             return Inventory.objects.none()
 
     def update(self, request, *args, **kwargs):
@@ -874,14 +906,17 @@ class InventoryMovementListView(generics.ListAPIView):
 
         # Filter movements based on the accessibility of the related inventory item
         if organization.organization_type in ['buyer', 'both']:
-            # Buyers see movements for inventory items belonging to products
-            # from organizations they have an 'accepted' supplier relationship with.
+            # Buyers see movements for inventory items belonging to:
+            # 1. Their own organization OR
+            # 2. Products from organizations they have an 'accepted' supplier relationship with.
             accepted_supplier_ids = OrganizationRelationship.objects.filter(
                 buyer_organization=organization,
                 status='accepted'
             ).values_list('supplier_organization__id', flat=True)
 
-            queryset = queryset.filter(inventory__product__organization__id__in=accepted_supplier_ids)
+            queryset = queryset.filter(
+                Q(inventory__organization=organization) | Q(inventory__product__organization__id__in=accepted_supplier_ids)
+            )
 
         elif organization.organization_type in ['supplier', 'internal']:
              # Suppliers/Internal users see movements for inventory items
