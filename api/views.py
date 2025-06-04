@@ -286,29 +286,37 @@ class updateCartView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, IsBuyer]
 
-    def post(self, request, format=None):
+    # Changed from post to patch
+    def patch(self, request, format=None):
+        print("--- Inside updateCartView PATCH method ---") # Updated print statement
         data = request.data
         product_id = data.get('product_id')
-        # Expecting 'action' ('add' or 'remove') and 'amount'
         action = data.get('action')
         amount = data.get('amount')
+        print(f"Received data: product_id={product_id}, action={action}, amount={amount}")
 
         # Validate action
         if action not in ['add', 'remove']:
+            print(f"Invalid action received: {action}")
             return Response({"detail": "Invalid action. Must be 'add' or 'remove'."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Validate amount is a positive integer
         try:
             amount = int(amount)
             if amount <= 0:
+                print(f"Invalid amount received: {amount}")
                 return Response({"detail": "Amount must be a positive integer."}, status=status.HTTP_400_BAD_REQUEST)
+            print(f"Amount validated: {amount}")
         except (ValueError, TypeError):
+            print(f"Invalid amount format received: {amount}")
             return Response({"detail": "Invalid amount provided."}, status=status.HTTP_400_BAD_REQUEST)
 
         product = get_object_or_404(Product, id=product_id)
         user = request.user
+        print(f"User: {user}, Product: {product.name}")
 
         if not hasattr(user, 'organization') or not user.organization:
+             print("updateCartView: User not associated with an organization.")
              return Response({"detail": "User is not associated with an organization."}, status=status.HTTP_400_BAD_REQUEST)
 
         buyer, created = Buyer.objects.get_or_create(
@@ -320,30 +328,37 @@ class updateCartView(APIView):
                 'organization': user.organization # Ensure buyer is linked to organization
             }
         )
+        print(f"updateCartView: Retrieved/Created Buyer: {buyer} (ID: {buyer.id}), Created: {created}")
 
         if not buyer.organization:
              if hasattr(user, 'organization') and user.organization:
                  buyer.organization = user.organization
                  buyer.save()
+                 print(f"updateCartView: Buyer organization set to: {buyer.organization}")
              else:
+                 print("updateCartView: Buyer is not associated with an organization after get_or_create.")
                  return Response({"detail": "Buyer is not associated with an organization."}, status=status.HTTP_400_BAD_REQUEST)
 
 
         # Get or create the pending order for this buyer
         order, order_created  = Order.objects.get_or_create(customer=buyer, status='pending')
+        print(f"updateCartView: Retrieved/Created Order: {order} (ID: {order.id}), Created: {order_created}")
 
         # Explicitly set the organization on the order if it's not already set
         if not order.organization:
             order.organization = buyer.organization
             order.save()
+            print(f"updateCartView: Order organization set to: {order.organization}")
 
         # Ensure the order has an organization before proceeding
         if not order.organization:
+             print("updateCartView: Could not determine organization for the order.")
              return Response({"detail": "Could not determine organization for the order."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
         # Use a transaction for atomicity
         with transaction.atomic():
+            print("updateCartView: Starting atomic transaction.")
             # Get or create the order item
             order_item, order_item_created = OrderItem.objects.get_or_create(
                 order=order,
@@ -354,19 +369,24 @@ class updateCartView(APIView):
                     'organization': order.organization # Link order item to order's organization
                 }
             )
+            print(f"updateCartView: OrderItem: {order_item}, Created: {order_item_created}")
 
             current_quantity = order_item.quantity
             new_quantity = current_quantity
+            print(f"updateCartView: Current quantity: {current_quantity}")
 
             if action == 'add':
                 new_quantity = current_quantity + amount
                 message = 'Item quantity increased'
+                print(f"updateCartView: Action 'add'. New quantity calculated: {new_quantity}")
             elif action == 'remove':
                 new_quantity = current_quantity - amount
                 message = 'Item quantity decreased'
+                print(f"updateCartView: Action 'remove'. New quantity calculated: {new_quantity}")
 
             # Ensure new quantity is not negative
             new_quantity = max(0, new_quantity)
+            print(f"updateCartView: Final new quantity (min 0): {new_quantity}")
 
             if new_quantity <= 0:
                 # If the new quantity is 0 or less, delete the item
@@ -375,16 +395,19 @@ class updateCartView(APIView):
                     order_item.delete()
                     updated_item_data = None # Item was deleted
                     message = 'Item removed from cart'
+                    print(f"updateCartView: New quantity <= 0. Deleted OrderItem ID: {order_item_id_to_delete}")
                 else:
                     # Item was just created with quantity 0, no need to delete
                     updated_item_data = None
                     message = 'Item quantity is zero'
+                    print("updateCartView: OrderItem was just created with quantity 0. No deletion needed.")
 
             else:
                 # If the new quantity is greater than 0, update the quantity
                 order_item.quantity = new_quantity
                 order_item.unit_price = product.price # Ensure unit price is current
                 order_item.save()
+                print(f"updateCartView: OrderItem quantity updated to {order_item.quantity} and saved.")
                 # message is already set based on action
 
                 # Prepare updated item data for the response
@@ -401,14 +424,19 @@ class updateCartView(APIView):
                         'total': str(updated_order_item.get_total), # Use the property
                         'total_completed_orders': updated_order_item.product.get_completed,
                     }
+                    print(f"updateCartView: Updated item data prepared: {updated_item_data}")
                 except OrderItem.DoesNotExist:
                     # This case should ideally not happen if quantity > 0 and save was successful
                     updated_item_data = None
+                    print("updateCartView: Error: OrderItem not found after saving.")
 
 
             # Re-fetch the order to get updated totals after item changes
             order.refresh_from_db()
+            print(f"updateCartView: Order refreshed from DB. Current total items: {order.get_cart_items}, Current total cost: {order.get_cart_total}")
+            print(f"updateCartView: Order status after updateCartView transaction: {order.status}") # Added print statement
 
+            print("updateCartView: Transaction successful. Returning response from updateCartView.")
             return Response({
                 'message': message,
                 'total_items': order.get_cart_items,
@@ -417,16 +445,24 @@ class updateCartView(APIView):
             }, status=status.HTTP_200_OK)
 
 def send_purchase_confirmation_email(user_email, first_name, order, total):
+    print("--- Inside send_purchase_confirmation_email ---")
     shipping_address = None
-    if order.shipping:
+    if order.shipping_address:
         shipping_address = order.shippingaddress_set.all().first()
+        print(f"Shipping address found: {shipping_address}")
 
-    template = render_to_string('api/email_template.html', {'order': order,
-                                                            'orderitems': order.orderitem_set.all(),
-                                                        "first_name": first_name,
-                                                        "total": total,
-                                                        'shipping_address': shipping_address
-                                                        })
+    try:
+        template = render_to_string('api/email_template.html', {
+            'order': order,
+            'orderitems': order.items.all(),
+            "first_name": first_name,
+            "total": total,
+            'shipping_address': shipping_address
+        })
+        print("Email template rendered successfully.")
+    except Exception as e:
+        print(f"Error rendering email template: {e}")
+
     email = EmailMessage(
         'Your purchase has been confirmed',
         template,
@@ -434,7 +470,11 @@ def send_purchase_confirmation_email(user_email, first_name, order, total):
         [user_email],
     )
     email.fail_silently=False
-    email.send()
+    try:
+        email.send()
+        print(f"Purchase confirmation email sent to {user_email}.")
+    except Exception as e:
+        print(f"Error sending email to {user_email}: {e}")
 
 class ProcessOrderView(APIView):
     # Allow IsBuyer OR IsAdminOrManager | IsStaff to process orders
@@ -442,25 +482,52 @@ class ProcessOrderView(APIView):
     authentication_classes = [JWTAuthentication]
 
     def post(self, request, format=None):
+        print("--- Inside ProcessOrderView POST method ---")
         user_info = request.data.get('user_info')
         shipping_info = request.data.get('shipping_info')
-        total = request.data.get('total')
+        total_str = request.data.get('total') # Get total as string initially
+        print(f"Received total string from frontend: {total_str}")
 
         user = request.user
         organization = user.organization
+        print(f"Processing order for User: {user}, Organization: {organization}")
 
         if not organization:
+             print("User not associated with an organization.")
              return Response({"detail": "User is not associated with an organization."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Ensure the user is authorized to process orders for this organization type
         if organization.organization_type not in ['buyer', 'supplier', 'both', 'internal']:
+             print(f"Organization type {organization.organization_type} not authorized to process orders.")
              return Response({"detail": "Your organization type is not authorized to process orders."}, status=status.HTTP_403_FORBIDDEN)
 
         # If the user is a buyer, they process their own orders
         if organization.organization_type == 'buyer':
              buyer, created = Buyer.objects.get_or_create(user=user, defaults={'first_name': user.first_name, 'last_name': user.last_name, 'email': user.email})
-             # Change complete=False to status='pending'
-             order, created = Order.objects.get_or_create(customer=buyer, status='pending')
+             print(f"Retrieved/Created Buyer: {buyer} (ID: {buyer.id}), Created: {created}")
+
+             # Get all pending orders for this buyer
+             pending_orders = Order.objects.filter(customer=buyer, status='pending').order_by('-order_date')
+             print(f"Found {pending_orders.count()} pending orders for buyer {buyer.id}.")
+             for po in pending_orders:
+                 print(f"- Pending Order ID: {po.id}, Status: {po.status}, Items Count: {po.items.count()}, Total: {po.get_cart_total}")
+
+             # Get the most recent pending order
+             order = pending_orders.first()
+             print(f"Selected Pending Order: {order} (ID: {order.id if order else 'None'})")
+
+
+             if not order:
+                 print("No pending order found for this buyer.")
+                 return Response({"detail": "No pending order found."}, status=status.HTTP_400_BAD_REQUEST)
+
+             # Optional: Check for multiple pending orders (indicates a potential issue in cart logic)
+             if pending_orders.count() > 1:
+                 print(f"Warning: Multiple pending orders found for buyer {buyer.id}. Processing the most recent one (ID: {order.id}).")
+                 # You might want to add more robust handling here, e.g., error or process the most recent one.
+                 # For now, we proceed with the most recent one retrieved above.
+
+
         # If the user is a supplier/internal/both, they might be processing an order placed by a buyer
         # This part of the logic would need to be more complex to identify which order is being processed.
         # For simplicity in this example, we'll assume the request includes the order ID if not a buyer.
@@ -469,36 +536,56 @@ class ProcessOrderView(APIView):
         elif organization.organization_type in ['supplier', 'both', 'internal']:
              # This view is primarily for the buyer completing their own order.
              # Processing orders initiated by buyers from the supplier side would require a different view/logic.
+             print("Supplier/Internal user attempting to use buyer process order endpoint.")
              return Response({"detail": "This endpoint is primarily for buyers to complete their own orders."}, status=status.HTTP_403_FORBIDDEN)
 
         # Get a default location for the buyer's organization
         # You might need more sophisticated logic to determine the correct receiving location
         buyer_default_location = Location.objects.filter(organization=organization).first()
+        print(f"Buyer default location: {buyer_default_location}")
 
         if not buyer_default_location:
+             print("Buyer organization has no locations defined.")
              # Handle the case where the buyer's organization has no locations
              return Response({"detail": "Your organization does not have any locations defined. Cannot process order."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Convert the received total to Decimal for precise comparison
+        try:
+            received_total = Decimal(total_str)
+            print(f"Received total as Decimal: {received_total}")
+        except (ValueError, TypeError):
+            print(f"Invalid total amount provided: {total_str}")
+            return Response({"detail": "Invalid total amount provided."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Use a transaction to ensure atomicity of inventory updates
         with transaction.atomic():
-            # Compare floats carefully
-            if float(total) == float(order.get_cart_total):
-                # Change complete = True to status = 'completed'
+            print("Starting atomic transaction for order processing.")
+            # Check the order items and calculated total before comparison
+            order.refresh_from_db() # Ensure the order object is fresh
+            print(f"Order {order.id} status: {order.status}")
+            print(f"Order {order.id} items count: {order.items.count()}")
+            print(f"Order {order.id} calculated total: {order.get_cart_total}")
+
+            # Compare Decimal values
+            if received_total == order.get_cart_total: # Compare Decimal with Decimal
+                print("Total match. Processing order.")
                 order.status = 'completed'
                 order.date_completed = timezone.now()
                 order.save()
+                print(f"Order {order.id} status updated to 'completed'.")
 
                 # Process each order item for inventory updates
                 for order_item in order.items.all(): # Use order.items.all() to access related items
                     product = order_item.product
                     quantity_purchased = order_item.quantity
+                    print(f"Processing item for inventory update: Product {product.sku}, Quantity {quantity_purchased}")
 
                     # --- Supplier Inventory Update ---
                     # Find the supplier's inventory item for this product.
                     # This assumes the product belongs to a supplier organization.
                     supplier_organization = product.organization
                     if supplier_organization and supplier_organization.organization_type in ['supplier', 'both']:
+                        print(f"Product belongs to supplier organization: {supplier_organization.name}")
                         # Find an inventory item for this product at the supplier's organization.
                         # This might need refinement based on how suppliers manage locations.
                         # For simplicity, we'll try to find any inventory item for the product at the supplier's org.
@@ -506,12 +593,14 @@ class ProcessOrderView(APIView):
                             product=product,
                             organization=supplier_organization
                         ).first() # Get the first one found
+                        print(f"Supplier inventory item found: {supplier_inventory_item}")
 
                         if supplier_inventory_item:
                             # Decrease supplier's inventory
                             supplier_inventory_item.quantity -= quantity_purchased
                             supplier_inventory_item.last_sold = timezone.now()
                             supplier_inventory_item.save()
+                            print(f"Supplier inventory updated for {product.sku}. New quantity: {supplier_inventory_item.quantity}")
 
                             # Create supplier inventory movement (subtraction/sale)
                             InventoryMovement.objects.create(
@@ -522,6 +611,7 @@ class ProcessOrderView(APIView):
                                 organization=supplier_organization, # The supplier's organization
                                 note=f"Sale to {organization.name} (Order {order.id})"
                             )
+                            print("Supplier inventory movement recorded.")
                         else:
                             # Handle case where supplier inventory item is not found (e.g., log a warning)
                             print(f"Warning: Supplier inventory item not found for product {product.sku} at organization {supplier_organization.name}")
@@ -536,11 +626,13 @@ class ProcessOrderView(APIView):
                         location=buyer_default_location, # Use the fetched location
                         defaults={'quantity': 0} # Start with 0 if creating
                     )
+                    print(f"Buyer inventory item found/created: {buyer_inventory_item}, Created: {created}")
 
                     # Increase buyer's inventory
                     buyer_inventory_item.quantity += quantity_purchased
                     # You might want to set a 'last_received' field here
                     buyer_inventory_item.save()
+                    print(f"Buyer inventory updated for {product.sku}. New quantity: {buyer_inventory_item.quantity}")
 
                     # Create buyer inventory movement (addition/purchase)
                     InventoryMovement.objects.create(
@@ -551,14 +643,18 @@ class ProcessOrderView(APIView):
                         organization=organization, # The buyer's organization
                         note=f"Purchase from {supplier_organization.name} (Order {order.id})"
                     )
+                    print("Buyer inventory movement recorded.")
 
             else:
                 # Handle total mismatch (potential fraud or calculation error)
+                # Log the mismatch for debugging
+                print(f"Total mismatch for Order {order.id}: Received {received_total}, Calculated {order.get_cart_total}")
                 return Response({"detail": "Total mismatch. Order not processed."}, status=status.HTTP_400_BAD_REQUEST)
 
 
         # Check if shipping is required based on the order object
         if order.shipping_address: # Assuming shipping_address field indicates if shipping is needed
+            print("Shipping address exists on order. Creating ShippingAddress object.")
             ShippingAddress.objects.create(
             customer=buyer,
             order=order,
@@ -568,9 +664,15 @@ class ProcessOrderView(APIView):
             zipcode=shipping_info.get('zipcode'),
             country=shipping_info.get('country')
             )
-        send_purchase_confirmation_email(request.user.email, request.user.first_name, order, total)
+            print("ShippingAddress object created.")
+
+        # Pass the Decimal total to the email function
+        print("Sending purchase confirmation email.")
+        send_purchase_confirmation_email(request.user.email, request.user.first_name, order, received_total)
+        print("Purchase confirmation email sent.")
 
         # Return order status based on the 'status' field
+        print(f"Order processing complete. Returning status: {order.status}")
         return Response({'order_status': order.status, 'redirect': '/'}, status=status.HTTP_200_OK)
 
 class UnAuthProcessOrderView(APIView):

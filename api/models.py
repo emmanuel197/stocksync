@@ -2,11 +2,13 @@ from django.db import models
 from django.conf import settings
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from django.db.models import Sum
+from django.db.models import Sum, Q, Prefetch
 import uuid
 from accounts.models import User, Organization
 from decimal import Decimal
 import random, string
+from django.utils import timezone
+from django.db import transaction
 
 # Create your models here.
 
@@ -411,23 +413,23 @@ def generate_unique_transaction_id():
 class Order(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Pending'),
+        ('completed', 'Completed'),
+        ('canceled', 'Canceled'),
         ('processing', 'Processing'),
         ('shipped', 'Shipped'),
         ('delivered', 'Delivered'),
-        ('canceled', 'Canceled'),
-        ('returned', 'Returned'),
     ]
 
     PAYMENT_STATUS_CHOICES = [
         ('unpaid', 'Unpaid'),
-        ('partially_paid', 'Partially Paid'),
         ('paid', 'Paid'),
         ('refunded', 'Refunded'),
+        ('partially_refunded', 'Partially Refunded'),
     ]
 
     order_number = models.CharField(max_length=20, unique=True, blank=True, null=True)
     order_date = models.DateTimeField(auto_now_add=True)
-    customer = models.ForeignKey(Buyer, on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
+    customer = models.ForeignKey('Buyer', on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='unpaid')
@@ -435,8 +437,9 @@ class Order(models.Model):
     customer_info = models.JSONField(blank=True, null=True, help_text="Additional customer information")
     notes = models.TextField(blank=True, null=True)
     organization = models.ForeignKey('accounts.Organization', on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
-    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_orders')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='created_orders')
     updated_at = models.DateTimeField(auto_now=True)
+    date_completed = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         indexes = [
@@ -448,29 +451,32 @@ class Order(models.Model):
         ]
 
     def __str__(self):
-        return self.order_number
+        return self.order_number if self.order_number else f"Order (ID: {self.id or 'N/A'})"
 
     def save(self, *args, **kwargs):
-        if not self.order_number:
+        if not self.order_number and self.organization:
             prefix = 'ORD'
-            if self.organization:
-                last_order = Order.objects.filter(organization=self.organization).order_by('-id').first()
+            with transaction.atomic():
+                last_order = Order.objects.filter(organization=self.organization).select_for_update().order_by('-id').first()
                 if last_order and last_order.order_number:
                     try:
-                        last_number = int(last_order.order_number.split('-')[-1])
-                        new_number = last_number + 1
-                        self.order_number = f'{prefix}-{self.organization.id}-{new_number:06d}'
+                        parts = last_order.order_number.split('-')
+                        if len(parts) > 2:
+                            last_number = int(parts[-1])
+                            new_number = last_number + 1
+                            self.order_number = f'{prefix}-{self.organization.id}-{new_number:06d}'
+                        else:
+                            self.order_number = f'{prefix}-{self.organization.id}-000001'
                     except (ValueError, IndexError):
                         self.order_number = f'{prefix}-{self.organization.id}-000001'
                 else:
                     self.order_number = f'{prefix}-{self.organization.id}-000001'
-            else:
-                pass
+        elif not self.order_number:
+            pass
 
         super().save(*args, **kwargs)
 
     def calculate_total(self):
-        """Calculates the total amount of the order by summing item subtotals."""
         return self.items.aggregate(total=Sum('subtotal'))['total'] or Decimal('0.00')
 
     def update_inventory(self, add_to_inventory=False):
@@ -501,24 +507,22 @@ class Order(models.Model):
 
     @property
     def get_cart_total(self):
-        """Calculates the total cost of all items in the cart (pending order)."""
         total = self.items.aggregate(total=Sum('subtotal'))['total']
         return total if total is not None else Decimal('0.00')
 
     @property
     def get_cart_items(self):
-        """Calculates the total number of items (sum of quantities) in the cart."""
         total_quantity = self.items.aggregate(total_quantity=Sum('quantity'))['total_quantity']
         return total_quantity if total_quantity is not None else 0
 
 
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='order_items')
+    product = models.ForeignKey('Product', on_delete=models.CASCADE, related_name='order_items')
     quantity = models.PositiveIntegerField(default=1)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     subtotal = models.DecimalField(max_digits=10, decimal_places=2)
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    organization = models.ForeignKey('accounts.Organization', on_delete=models.CASCADE)
 
     class Meta:
         indexes = [
@@ -528,15 +532,14 @@ class OrderItem(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.quantity} x {self.product.name} in Order {self.order.order_number}"
+        return f"{self.quantity} x {self.product.name} in Order {self.order.order_number if self.order and self.order.order_number else 'N/A'}"
 
     def save(self, *args, **kwargs):
-        # Calculate subtotal before saving
         self.subtotal = self.quantity * self.unit_price
 
         super().save(*args, **kwargs)
 
-        # Update the order's total amount after saving the item
+        self.order.refresh_from_db()
         self.order.total_amount = self.order.get_cart_total
         self.order.save()
 
