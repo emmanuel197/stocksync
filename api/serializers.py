@@ -500,12 +500,19 @@ class InventoryMovementSerializer(serializers.ModelSerializer):
     def get_inventory(self, obj):
         request = self.context.get('request')
         user_organization = request.user.organization if request and request.user and request.user.is_authenticated else None
-        inventory_item = obj.inventory
-        product_organization = inventory_item.product.organization # Get the organization of the product
+
+        # Re-fetch the Inventory object to ensure we have the latest quantity
+        try:
+            inventory_item = Inventory.objects.get(pk=obj.inventory.pk)
+        except Inventory.DoesNotExist:
+            return None # Or handle this case as appropriate
+
+        product_organization = inventory_item.product.organization
 
         # If the user is a buyer/both AND the product belongs to a different organization (a supplier)
         # Use BuyerSupplierInventorySerializer which hides quantity and uses BuyerSupplierProductSerializer
         if user_organization and user_organization.organization_type in ['buyer', 'both'] and product_organization != user_organization:
+            # Note: BuyerSupplierInventorySerializer excludes 'quantity' by design
             return BuyerSupplierInventorySerializer(inventory_item, context=self.context).data
         else:
             # Otherwise (user is supplier/internal, or buyer viewing their own product,
