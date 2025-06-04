@@ -467,14 +467,11 @@ class Order(models.Model):
             else:
                 pass
 
-        if not self.id:
-            super().save(*args, **kwargs)
-        else:
-            self.total_amount = sum(item.subtotal for item in self.items.all())
-            super().save(*args, **kwargs)
+        super().save(*args, **kwargs)
 
     def calculate_total(self):
-        return sum(item.subtotal for item in self.items.all())
+        """Calculates the total amount of the order by summing item subtotals."""
+        return self.items.aggregate(total=Sum('subtotal'))['total'] or Decimal('0.00')
 
     def update_inventory(self, add_to_inventory=False):
         for item in self.items.all():
@@ -502,6 +499,18 @@ class Order(models.Model):
             except Exception as e:
                 print(f"Error updating inventory for order {self.order_number}: {e}")
 
+    @property
+    def get_cart_total(self):
+        """Calculates the total cost of all items in the cart (pending order)."""
+        total = self.items.aggregate(total=Sum('subtotal'))['total']
+        return total if total is not None else Decimal('0.00')
+
+    @property
+    def get_cart_items(self):
+        """Calculates the total number of items (sum of quantities) in the cart."""
+        total_quantity = self.items.aggregate(total_quantity=Sum('quantity'))['total_quantity']
+        return total_quantity if total_quantity is not None else 0
+
 
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
@@ -522,12 +531,22 @@ class OrderItem(models.Model):
         return f"{self.quantity} x {self.product.name} in Order {self.order.order_number}"
 
     def save(self, *args, **kwargs):
+        # Calculate subtotal before saving
         self.subtotal = self.quantity * self.unit_price
 
         super().save(*args, **kwargs)
 
-        self.order.total_amount = self.order.calculate_total()
+        # Update the order's total amount after saving the item
+        self.order.total_amount = self.order.get_cart_total
         self.order.save()
+
+    @property
+    def get_total(self):
+        """
+        Calculates the total price for this order item (quantity * unit_price).
+        This is equivalent to the 'subtotal' field.
+        """
+        return self.subtotal
 
 
 class ShippingAddress(models.Model):

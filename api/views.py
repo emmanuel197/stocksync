@@ -30,6 +30,7 @@ from django.utils.http import urlsafe_base64_encode
 from accounts.permissions import IsBuyer, IsAdminOrManager, IsStaff
 from djoser.conf import settings as djoser_settings
 from django.db import transaction
+from decimal import Decimal
 
 # Create your views here.
 class ProductAPIView(generics.ListAPIView):
@@ -288,45 +289,132 @@ class updateCartView(APIView):
     def post(self, request, format=None):
         data = request.data
         product_id = data.get('product_id')
+        # Expecting 'action' ('add' or 'remove') and 'amount'
         action = data.get('action')
-        product = get_object_or_404(Product, id=product_id) # Use get_object_or_404
-        buyer, created = Buyer.objects.get_or_create(user=request.user, defaults={'first_name': request.user.first_name, 'last_name': request.user.last_name, 'email': request.user.email}) # Use defaults for get_or_create
-        order, order_created  = Order.objects.get_or_create(customer=buyer, complete=False)
-        order_item, order_item_created = OrderItem.objects.get_or_create(order=order, product=product)
+        amount = data.get('amount')
 
-        if 'add' == action:
-            order_item.quantity += 1
-            order_item.save()
-        elif 'remove' == action:
-            order_item.quantity -= 1
-            if order_item.quantity <= 0:
-                order_item.delete()
-            else:
-                order_item.save()
+        # Validate action
+        if action not in ['add', 'remove']:
+            return Response({"detail": "Invalid action. Must be 'add' or 'remove'."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Re-fetch the order to get updated totals after item changes
-        order.refresh_from_db()
-
-        # Try to get the updated order item, handle deletion
+        # Validate amount is a positive integer
         try:
-            updated_order_item = OrderItem.objects.select_related('product').get(id=order_item.id)
-            item_data = {
-                'id': updated_order_item.product.id,
-                'product': updated_order_item.product.name,
-                'price': updated_order_item.product.price,
-                'image': updated_order_item.product.image.url if updated_order_item.product.image else None, # Handle potential missing image
-                'quantity': updated_order_item.quantity,
-                'total': updated_order_item.get_total,
-                'total_completed_orders': updated_order_item.product.get_completed,
-            }
-            return Response({'message': 'Cart updated successfully', 'total_items': order.get_cart_items,
-                'total_cost': order.get_cart_total,
-                'updated_item': item_data}, status=status.HTTP_200_OK)
-        except OrderItem.DoesNotExist:
-            # If the item was deleted, return a response indicating that
-            return Response({'message': 'Item removed from cart', 'item_id': product_id, 'total_items': order.get_cart_items,
-                'total_cost': order.get_cart_total}, status=status.HTTP_200_OK)
+            amount = int(amount)
+            if amount <= 0:
+                return Response({"detail": "Amount must be a positive integer."}, status=status.HTTP_400_BAD_REQUEST)
+        except (ValueError, TypeError):
+            return Response({"detail": "Invalid amount provided."}, status=status.HTTP_400_BAD_REQUEST)
 
+        product = get_object_or_404(Product, id=product_id)
+        user = request.user
+
+        if not hasattr(user, 'organization') or not user.organization:
+             return Response({"detail": "User is not associated with an organization."}, status=status.HTTP_400_BAD_REQUEST)
+
+        buyer, created = Buyer.objects.get_or_create(
+            user=user,
+            defaults={
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'email': user.email,
+                'organization': user.organization # Ensure buyer is linked to organization
+            }
+        )
+
+        if not buyer.organization:
+             if hasattr(user, 'organization') and user.organization:
+                 buyer.organization = user.organization
+                 buyer.save()
+             else:
+                 return Response({"detail": "Buyer is not associated with an organization."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+        # Get or create the pending order for this buyer
+        order, order_created  = Order.objects.get_or_create(customer=buyer, status='pending')
+
+        # Explicitly set the organization on the order if it's not already set
+        if not order.organization:
+            order.organization = buyer.organization
+            order.save()
+
+        # Ensure the order has an organization before proceeding
+        if not order.organization:
+             return Response({"detail": "Could not determine organization for the order."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+        # Use a transaction for atomicity
+        with transaction.atomic():
+            # Get or create the order item
+            order_item, order_item_created = OrderItem.objects.get_or_create(
+                order=order,
+                product=product,
+                defaults={
+                    'quantity': 0, # Start with 0 if creating
+                    'unit_price': product.price,
+                    'organization': order.organization # Link order item to order's organization
+                }
+            )
+
+            current_quantity = order_item.quantity
+            new_quantity = current_quantity
+
+            if action == 'add':
+                new_quantity = current_quantity + amount
+                message = 'Item quantity increased'
+            elif action == 'remove':
+                new_quantity = current_quantity - amount
+                message = 'Item quantity decreased'
+
+            # Ensure new quantity is not negative
+            new_quantity = max(0, new_quantity)
+
+            if new_quantity <= 0:
+                # If the new quantity is 0 or less, delete the item
+                if not order_item_created: # Only delete if the item already existed
+                    order_item_id_to_delete = order_item.id # Store ID before deletion
+                    order_item.delete()
+                    updated_item_data = None # Item was deleted
+                    message = 'Item removed from cart'
+                else:
+                    # Item was just created with quantity 0, no need to delete
+                    updated_item_data = None
+                    message = 'Item quantity is zero'
+
+            else:
+                # If the new quantity is greater than 0, update the quantity
+                order_item.quantity = new_quantity
+                order_item.unit_price = product.price # Ensure unit price is current
+                order_item.save()
+                # message is already set based on action
+
+                # Prepare updated item data for the response
+                # Re-fetch the order item to get updated calculated properties like get_total
+                try:
+                    # Use select_related to avoid extra query for product
+                    updated_order_item = OrderItem.objects.select_related('product').get(id=order_item.id)
+                    updated_item_data = {
+                        'id': updated_order_item.product.id,
+                        'product': updated_order_item.product.name,
+                        'price': str(updated_order_item.product.price), # Ensure decimal is string
+                        'image': updated_order_item.product.image.url if updated_order_item.product.image else None,
+                        'quantity': updated_order_item.quantity,
+                        'total': str(updated_order_item.get_total), # Use the property
+                        'total_completed_orders': updated_order_item.product.get_completed,
+                    }
+                except OrderItem.DoesNotExist:
+                    # This case should ideally not happen if quantity > 0 and save was successful
+                    updated_item_data = None
+
+
+            # Re-fetch the order to get updated totals after item changes
+            order.refresh_from_db()
+
+            return Response({
+                'message': message,
+                'total_items': order.get_cart_items,
+                'total_cost': str(order.get_cart_total), # Ensure decimal is string
+                'updated_item': updated_item_data # Will be None if item was deleted
+            }, status=status.HTTP_200_OK)
 
 def send_purchase_confirmation_email(user_email, first_name, order, total):
     shipping_address = None
@@ -371,7 +459,8 @@ class ProcessOrderView(APIView):
         # If the user is a buyer, they process their own orders
         if organization.organization_type == 'buyer':
              buyer, created = Buyer.objects.get_or_create(user=user, defaults={'first_name': user.first_name, 'last_name': user.last_name, 'email': user.email})
-             order, created = Order.objects.get_or_create(customer=buyer, complete=False)
+             # Change complete=False to status='pending'
+             order, created = Order.objects.get_or_create(customer=buyer, status='pending')
         # If the user is a supplier/internal/both, they might be processing an order placed by a buyer
         # This part of the logic would need to be more complex to identify which order is being processed.
         # For simplicity in this example, we'll assume the request includes the order ID if not a buyer.
@@ -382,16 +471,26 @@ class ProcessOrderView(APIView):
              # Processing orders initiated by buyers from the supplier side would require a different view/logic.
              return Response({"detail": "This endpoint is primarily for buyers to complete their own orders."}, status=status.HTTP_403_FORBIDDEN)
 
+        # Get a default location for the buyer's organization
+        # You might need more sophisticated logic to determine the correct receiving location
+        buyer_default_location = Location.objects.filter(organization=organization).first()
+
+        if not buyer_default_location:
+             # Handle the case where the buyer's organization has no locations
+             return Response({"detail": "Your organization does not have any locations defined. Cannot process order."}, status=status.HTTP_400_BAD_REQUEST)
+
 
         # Use a transaction to ensure atomicity of inventory updates
         with transaction.atomic():
-            if float(total) == float(order.get_cart_total): # Compare floats carefully
-                order.complete = True
+            # Compare floats carefully
+            if float(total) == float(order.get_cart_total):
+                # Change complete = True to status = 'completed'
+                order.status = 'completed'
                 order.date_completed = timezone.now()
                 order.save()
 
                 # Process each order item for inventory updates
-                for order_item in order.orderitem_set.all():
+                for order_item in order.items.all(): # Use order.items.all() to access related items
                     product = order_item.product
                     quantity_purchased = order_item.quantity
 
@@ -430,14 +529,11 @@ class ProcessOrderView(APIView):
 
                     # --- Buyer Inventory Update ---
                     # Find or create the buyer's inventory item for this product.
-                    # This assumes the buyer has a default receiving location or similar logic.
-                    # For simplicity, we'll try to find any inventory item for the product at the buyer's organization.
-                    # If none exists, we'll create one.
+                    # Use the buyer's default location
                     buyer_inventory_item, created = Inventory.objects.get_or_create(
                         product=product,
                         organization=organization, # The buyer's organization
-                        # You might need to specify a default location here or add logic to determine it
-                        # location=buyer_default_location, # Example
+                        location=buyer_default_location, # Use the fetched location
                         defaults={'quantity': 0} # Start with 0 if creating
                     )
 
@@ -461,19 +557,21 @@ class ProcessOrderView(APIView):
                 return Response({"detail": "Total mismatch. Order not processed."}, status=status.HTTP_400_BAD_REQUEST)
 
 
-        if order.shipping == True:
+        # Check if shipping is required based on the order object
+        if order.shipping_address: # Assuming shipping_address field indicates if shipping is needed
             ShippingAddress.objects.create(
             customer=buyer,
             order=order,
-            address=shipping_info['address'],
-            city=shipping_info['city'],
-            state=shipping_info['state'],
-            zipcode=shipping_info['zipcode'],
-            country=shipping_info['country']
+            address=shipping_info.get('address'), # Use .get() for safety
+            city=shipping_info.get('city'),
+            state=shipping_info.get('state'),
+            zipcode=shipping_info.get('zipcode'),
+            country=shipping_info.get('country')
             )
         send_purchase_confirmation_email(request.user.email, request.user.first_name, order, total)
 
-        return Response({'order_status': order.complete, 'redirect': '/'}, status=status.HTTP_200_OK)
+        # Return order status based on the 'status' field
+        return Response({'order_status': order.status, 'redirect': '/'}, status=status.HTTP_200_OK)
 
 class UnAuthProcessOrderView(APIView):
     def post(self, request, format=None):         
