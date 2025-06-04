@@ -419,38 +419,40 @@ class InventorySerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['last_stocked', 'last_sold', 'created_at', 'updated_at', 'organization']
 
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        request = self.context.get('request')
+        user_organization = request.user.organization if request and request.user and request.user.is_authenticated else None
+
+        # Check if the user is a buyer/both and the product belongs to a different organization
+        if user_organization and user_organization.organization_type in ['buyer', 'both'] and instance.product.organization != user_organization:
+            # If it's a supplier's product viewed by a buyer, use BuyerSupplierProductSerializer for the product part
+            product_serializer = BuyerSupplierProductSerializer(instance.product, context=self.context)
+            representation['product'] = product_serializer.data
+            # Keep quantity as it's in the buyer's inventory
+        else:
+            # Otherwise, use the standard ProductSerializer (shows cost)
+            product_serializer = ProductSerializer(instance.product, context=self.context)
+            representation['product'] = product_serializer.data
+            # Keep quantity
+
+        return representation
+
 class BuyerSupplierInventorySerializer(serializers.ModelSerializer):
     location = LocationSerializer(read_only=True)
     is_available = serializers.SerializerMethodField()
+    product = BuyerSupplierProductSerializer(read_only=True) # Use the buyer-specific product serializer
 
     class Meta:
         model = Inventory
         fields = [
-            'id', 'location', 'is_available', 'last_stocked',
+            'id', 'product', 'location', 'is_available', 'last_stocked', # Include product, exclude quantity
             'created_at', 'updated_at', 'organization'
         ]
         read_only_fields = ['last_stocked', 'created_at', 'updated_at', 'organization']
 
     def get_is_available(self, obj):
         return obj.quantity > 0
-
-    def to_representation(self, instance):
-        representation = super().to_representation(instance)
-
-        request = self.context.get('request')
-        user_organization = request.user.organization if request and request.user and request.user.is_authenticated else None
-
-        if user_organization and instance.organization == user_organization:
-            product_serializer = ProductSerializer(instance.product, context=self.context)
-            representation['product'] = product_serializer.data
-            representation['quantity'] = instance.quantity
-            representation.pop('is_available', None)
-        else:
-            product_serializer = BuyerSupplierProductSerializer(instance.product, context=self.context)
-            representation['product'] = product_serializer.data
-            representation.pop('quantity', None)
-
-        return representation
 
 class InventoryCreateSerializer(serializers.ModelSerializer):
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
@@ -482,7 +484,7 @@ class InventoryCreateSerializer(serializers.ModelSerializer):
         return data
 
 class InventoryMovementSerializer(serializers.ModelSerializer):
-    inventory = InventorySerializer(read_only=True, context={'request': None})
+    inventory = serializers.SerializerMethodField()
     moved_by = serializers.SlugRelatedField(slug_field='email', read_only=True)
 
     class Meta:
@@ -495,12 +497,22 @@ class InventoryMovementSerializer(serializers.ModelSerializer):
             'timestamp', 'moved_by'
         ]
 
-    def __init__(self, *args, **kwargs):
-        request = kwargs.get('context', {}).get('request')
-        super().__init__(*args, **kwargs)
+    def get_inventory(self, obj):
+        request = self.context.get('request')
+        user_organization = request.user.organization if request and request.user and request.user.is_authenticated else None
+        inventory_item = obj.inventory
+        product_organization = inventory_item.product.organization # Get the organization of the product
 
-        if 'inventory' in self.fields:
-            self.fields['inventory'].context['request'] = request
+        # If the user is a buyer/both AND the product belongs to a different organization (a supplier)
+        # Use BuyerSupplierInventorySerializer which hides quantity and uses BuyerSupplierProductSerializer
+        if user_organization and user_organization.organization_type in ['buyer', 'both'] and product_organization != user_organization:
+            return BuyerSupplierInventorySerializer(inventory_item, context=self.context).data
+        else:
+            # Otherwise (user is supplier/internal, or buyer viewing their own product,
+            # or buyer viewing a supplier product that is somehow in their own inventory),
+            # use the standard InventorySerializer.
+            # InventorySerializer's to_representation already handles hiding cost for supplier products in buyer's inventory.
+            return InventorySerializer(inventory_item, context=self.context).data
 
 class BrandSerializer(serializers.ModelSerializer):
     class Meta:
